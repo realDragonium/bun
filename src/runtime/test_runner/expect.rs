@@ -363,6 +363,18 @@ impl Expect {
         false
     }
 
+    /// Called by C++ for the message of a failed match: runs `run(context)` under a barrier, so no asymmetric matcher in it waits for a promise. `context` must be what `run` takes.
+    #[unsafe(no_mangle)]
+    pub(crate) unsafe extern "C" fn Expect__underBarrier(
+        context: *mut core::ffi::c_void,
+        run: unsafe extern "C" fn(*mut core::ffi::c_void),
+    ) {
+        let barrier = Pass::barrier();
+        let _entered = barrier.enter();
+        // SAFETY: the caller's contract.
+        unsafe { run(context) };
+    }
+
     /// Called by C++ when matching with asymmetric matchers
     #[unsafe(no_mangle)]
     pub(crate) extern "C" fn Expect_readFlagsAndProcessPromise(
@@ -2462,7 +2474,7 @@ unsafe extern "C" {
 }
 
 // Exports: handled by #[unsafe(no_mangle)] on:
-//   ExpectMatcherUtils_createSigleton, Expect_readFlagsAndProcessPromise, ExpectCustomAsymmetricMatcher__execute
+//   ExpectMatcherUtils_createSigleton, Expect_readFlagsAndProcessPromise, ExpectCustomAsymmetricMatcher__execute, Expect__underBarrier
 
 #[cfg(test)]
 mod tests {

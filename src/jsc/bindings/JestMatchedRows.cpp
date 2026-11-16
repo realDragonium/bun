@@ -13,6 +13,7 @@
 #include <wtf/BitVector.h>
 #include <wtf/FixedVector.h>
 #include <wtf/HashMap.h>
+#include <wtf/HashSet.h>
 
 namespace Bun {
 
@@ -433,6 +434,71 @@ JSC::JSValue JestMatchedRows::forSerializers(JSC::JSGlobalObject* globalObject, 
         RETURN_IF_EXCEPTION(scope, {});
     }
     return merged;
+}
+
+} // namespace Bun
+
+// Rust enters a barrier (expect_deferred.rs) and calls `run(context)` under it, so no asymmetric matcher in there waits for a promise.
+extern "C" void Expect__underBarrier(void* context, void (*run)(void*));
+
+namespace {
+struct CollectingWalk {
+    JSC::JSGlobalObject* globalObject;
+    JSC::ThrowScope& scope;
+    Bun::DeepMatchStateOfCollector& state;
+    JSC::JSValue received;
+    JSC::JSValue pattern;
+
+    static void run(void* context)
+    {
+        auto& walk = *static_cast<CollectingWalk*>(context);
+        Bun::collectMatchersAfterMismatch(walk.globalObject, walk.scope, walk.state, walk.received, walk.pattern);
+    }
+};
+}
+
+namespace Bun {
+
+// The second walk is for the message alone: whatever it throws, the match has failed. Out of line: its one caller is the entry of every toMatchObject().
+NEVER_INLINE JSC::JSValue matchedRowsOfFailedMatch(JSC::JSGlobalObject* globalObject, DeepMatchState& comparison, JSC::JSValue received, JSC::JSValue pattern)
+{
+    auto scope = DECLARE_THROW_SCOPE(globalObject->vm());
+    DeepMatchStateOfCollector state;
+    // Most patterns are plain objects and arrays with no matcher. The walk has none to ask then.
+    if (comparison.recorded.hasOverflowed() || !scanPatternForMatchers(globalObject, received, pattern, state))
+        RELEASE_AND_RETURN(scope, matchedRowsFrom(globalObject, comparison, received, pattern));
+
+    state.records = true;
+    state.comparison = &comparison;
+    // The walk needs a record only at two values that it goes into: the roots, and the two values of such a record whose pattern can lead to a matcher. The comparison records two values before the records at them.
+    using TwoValues = std::pair<JSC::JSCell*, JSC::JSCell*>;
+    WTF::HashSet<TwoValues> entered;
+    entered.add(TwoValues { received.asCell(), pattern.asCell() });
+    for (unsigned record = 0, count = comparison.recordedNames.size(); record < count; record++) {
+        TwoValues holder { comparison.recorded.at(record * 4).asCell(), comparison.recorded.at(record * 4 + 1).asCell() };
+        if (!entered.contains(holder))
+            continue;
+        if (JSC::JSValue patternOfValue = comparison.recorded.at(record * 4 + 3); patternOfValue.isObject()) {
+            auto scanned = state.patternLeadsToMatcher.find(asObject(patternOfValue));
+            if (scanned != state.patternLeadsToMatcher.end() && !scanned->value)
+                continue;
+            entered.add(TwoValues { comparison.recorded.at(record * 4 + 2).asCell(), patternOfValue.asCell() });
+        }
+        state.recordOfComparison.set(DeepMatchStateOfCollector::RecordKey { holder.first, holder.second, comparison.recordedNames[record].impl() }, record);
+    }
+
+    CollectingWalk walk { globalObject, scope, state, received, pattern };
+    Expect__underBarrier(&walk, CollectingWalk::run);
+    JSC::JSValue completed;
+    if (!scope.exception()) [[likely]]
+        completed = matchedRowsFrom(globalObject, state, received, pattern);
+    if (scope.exception()) [[unlikely]] {
+        // The walk gave up (the stack ran out, or the two roots threw): the message gets the rows of the comparison. A termination stays.
+        if (!scope.tryClearException())
+            return {};
+        RELEASE_AND_RETURN(scope, matchedRowsFrom(globalObject, comparison, received, pattern));
+    }
+    return completed;
 }
 
 } // namespace Bun
