@@ -72,7 +72,8 @@ await report("CompressionStream", [code], it => throughWeb(new CompressionStream
 await report("DecompressionStream", [streamed], it => throughWeb(new DecompressionStream("zstd"), it));
 for (const [name, params] of [
   ["long distance matching", { [ZSTD_c_enableLongDistanceMatching]: 1 }],
-  ["level 9, 4 workers", { [ZSTD_c_compressionLevel]: 9, [ZSTD_c_nbWorkers]: 4 }],
+  ...[1, 3, 9].map(level => [`level ${level}, 4 workers`, { [ZSTD_c_compressionLevel]: level, [ZSTD_c_nbWorkers]: 4 }]),
+  ["long distance matching, 4 workers", { [ZSTD_c_enableLongDistanceMatching]: 1, [ZSTD_c_nbWorkers]: 4 }],
 ]) {
   await report(`zlib.zstdCompressSync, ${name}`, [Buffer.concat([code, text, code])], it =>
     zlib.zstdCompressSync(it, { params }),

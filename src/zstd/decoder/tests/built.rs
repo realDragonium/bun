@@ -506,6 +506,12 @@ fn far_matches() -> Result<()> {
             frame.compressed(&repeated(9, count * literal_len), &sequences);
         }
     }
+    let near = Sequence {
+        literal_len: 1,
+        offset_value: 100,
+        match_len: 20,
+    };
+    frame.compressed(&repeated(9, 65), &[near; 65]);
     frame.check()
 }
 

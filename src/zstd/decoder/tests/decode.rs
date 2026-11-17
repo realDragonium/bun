@@ -575,6 +575,29 @@ fn huffman_codes_have_at_most_12_bits() {
 }
 
 #[test]
+fn what_is_missing_first_decides_on_the_error() {
+    // A sequence, and a stream for it without the mark at its end
+    let frame = hex("28b52ffd 0000 250000 00 01 00 00");
+    assert_eq!(at_once(&frame, 0), Err(Error::DstSizeTooSmall));
+    assert_eq!(at_once(&frame, 1), Err(Error::CorruptionDetected));
+
+    // Blocks that end with their literals
+    for blocks in ["0d0000 00", "3c0000 12c000 8010 03 00 250000 134000 03"] {
+        let frame = hex(&format!("28b52ffd 0000 {blocks}"));
+        assert_eq!(at_once(&frame, 9), Err(Error::CorruptionDetected));
+    }
+}
+
+#[test]
+fn short_content_needs_no_window() -> Result<()> {
+    let mut out = Vec::new();
+    let frame = hex("28b52ffd 4090 e802 431f00 61");
+    Decoder::new().step_growing(&frame, &mut out, 1000).1?;
+    assert_eq!(out, [b'a'; 1000]);
+    Ok(())
+}
+
+#[test]
 fn a_growing_output_seldom_moves() -> Result<()> {
     let frame = hex("28b52ffd 6000 03 032000 61");
     let (mut decoder, mut out, mut moves) = (Decoder::new(), Vec::new(), 0);
