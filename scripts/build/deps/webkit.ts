@@ -2009,8 +2009,8 @@ function outOfMemoryHook(cfg: Config, program: string): string {
  * The data of the ICU of a prebuilt WebKit is a zstd frame an item (icu/compress-data.ts), and that ICU calls a weak hook
  * on each item that it loads (icu/udata-decompress-hook.patch). Without one ICU knows no locale, and the compiler, which
  * asks Intl at build time how a locale writes a number or a date, is told nothing. Bun defines the hook
- * (src/jsc/bindings/bun_icu_decompress.cpp). This is `program` with the same on the same decoder: the hooks in WebKit's
- * sources want the C library.
+ * (src/jsc/bindings/bun_icu_decompress.cpp). Returns `program` with such a hook on Bun's decoder: the hooks in WebKit's
+ * sources need the C library.
  */
 function readingPrebuiltIcuData(cfg: Config, program: JSCProgram): JSCProgram {
   const source = join(depBuildDir(cfg, "WebKit"), "programs", program.name, "ICUData.cpp");

@@ -6,9 +6,11 @@ use bun_zstd_decoder::{Error, Result};
 
 use super::Reuse;
 use super::histogram::Histogram;
-use super::huffman::{Description, Table};
+use super::huffman::{Description, JUMP_TABLE_LEN, Table};
 use crate::bytes::{is_one_byte_repeated, put};
 use crate::parameters::{Strategy, Tuning};
+
+const FOUR_STREAMS_FROM: usize = 256;
 
 /// `content` is all `len` literals, or the one that they repeat.
 fn write_plain(encoding: Encoding, len: usize, content: &[u8], out: &mut [u8]) -> Result<usize> {
@@ -105,7 +107,12 @@ impl LiteralsPlan {
     }
 
     pub(crate) fn overhead(len: usize) -> usize {
-        compressed_header_len(len) + if len < 256 { 0 } else { 6 }
+        compressed_header_len(len)
+            + if len < FOUR_STREAMS_FROM {
+                0
+            } else {
+                JUMP_TABLE_LEN
+            }
     }
 }
 
@@ -133,7 +140,9 @@ impl LiteralTables {
 
     /// The table, if it has codes for all bytes.
     pub(crate) fn complete(&self) -> Option<&Table> {
-        (self.current.as_deref()).filter(|_| self.reuse == Reuse::Always)
+        self.current
+            .as_deref()
+            .filter(|_| self.reuse == Reuse::Always)
     }
 
     pub(crate) fn load(&mut self, weights: &[u8], log: u32, reuse: Reuse) -> Result<()> {
@@ -174,7 +183,8 @@ impl LiteralTables {
                 return Err(Error::DstSizeTooSmall);
             }
             let (header, rest) = out.split_at_mut(header_len);
-            let is_single_stream = len < 256 || (self.reuse == Reuse::Always && header_len == 3);
+            let is_single_stream =
+                len < FOUR_STREAMS_FROM || (self.reuse == Reuse::Always && header_len == 3);
             let compressed = self.compress_streams(
                 literals,
                 tuning.strategy,

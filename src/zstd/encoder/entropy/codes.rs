@@ -163,20 +163,24 @@ fn allows_less_than_1(sequence_count: usize) -> bool {
     sequence_count >= 2048
 }
 
+/// How many bytes it takes to tell the number of sequences.
+pub(crate) fn count_len(count: usize) -> usize {
+    1 + usize::from(count >= 128) + usize::from(count >= LONG_SEQUENCE_COUNT)
+}
+
 /// Also checks that there is room for what has to follow.
 pub(super) fn write_count(count: usize, out: &mut [u8]) -> Result<usize> {
     let [first, second, third, _] = out.first_chunk_mut().ok_or(Error::DstSizeTooSmall)?;
-    if count < 128 {
-        *first = count as u8;
-        Ok(1)
-    } else if count < LONG_SEQUENCE_COUNT {
-        [*first, *second] = (count as u16 + 0x8000).to_be_bytes();
-        Ok(2)
-    } else {
-        *first = 0xFF;
-        [*second, *third] = ((count - LONG_SEQUENCE_COUNT) as u16).to_le_bytes();
-        Ok(3)
+    let len = count_len(count);
+    match len {
+        1 => *first = count as u8,
+        2 => [*first, *second] = (count as u16 + 0x8000).to_be_bytes(),
+        _ => {
+            *first = 0xFF;
+            [*second, *third] = ((count - LONG_SEQUENCE_COUNT) as u16).to_le_bytes();
+        }
     }
+    Ok(len)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

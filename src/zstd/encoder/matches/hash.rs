@@ -105,7 +105,7 @@ pub(super) fn insert<const OWNER: Owner>(
     Some(())
 }
 
-/// The same for a dictionary, if the entry is free. That is hard to predict while the table `HAS_MANY` such.
+/// [`insert`] for a dictionary, if the entry is free. That is hard to predict while the table `HAS_MANY` such.
 #[inline(always)]
 pub(super) fn fill_gap<const HAS_MANY: bool>(
     table: &mut [u32],

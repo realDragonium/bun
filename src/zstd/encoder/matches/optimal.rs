@@ -1,6 +1,5 @@
 //! Looks for the cheapest way through all matches that there are.
 
-use core::convert::identity;
 use core::hint::black_box;
 use core::ops::RangeInclusive;
 
@@ -280,7 +279,7 @@ struct Finder<'a> {
 
 #[inline(always)]
 fn push(matches: &mut Vec<Match>, offset: OffsetValue, len: u32) {
-    vec::push_into_room(matches, Match { offset, len });
+    _ = matches.push_within_capacity(Match { offset, len });
 }
 
 impl Finder<'_> {
@@ -306,7 +305,7 @@ impl Finder<'_> {
         } else if REACH != Reach::Prefix
             && (REACH == Reach::Attached || is_in_reach)
             && earlier < history.prefix_index
-            && starts_alike(history.u32_at_index(earlier))
+            && starts_alike(u32_at(history.older, history.older_position(earlier)))
         {
             return history.match_len_at_index(at, earlier, min_match);
         }
@@ -428,18 +427,16 @@ impl Finder<'_> {
         let mut descent = Descent::new(nodes.get(current)?, at);
         let mut matched_end = current + WORD + 1;
         let mut attempts = self.tree.attempts;
-        let mut note = identity(
-            #[inline(always)]
-            |index: u32, len: u32| {
-                if len <= longest {
-                    return false;
-                }
-                matched_end = matched_end.max(index + len);
-                longest = len;
-                push(matches, OffsetValue::new(current - index), len);
-                len > HORIZON || len == left
-            },
-        );
+        let mut note = #[inline(always)]
+        |index: u32, len: u32| {
+            if len <= longest {
+                return false;
+            }
+            matched_end = matched_end.max(index + len);
+            longest = len;
+            push(matches, OffsetValue::new(current - index), len);
+            len > HORIZON || len == left
+        };
 
         while attempts > 0 && index >= lowest {
             let node = nodes.get(index)?;

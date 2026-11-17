@@ -2,11 +2,11 @@
 
 use core::ops::Range;
 
-use bun_zstd_decoder::format::{BLOCK_HEADER_LEN, LONG_SEQUENCE_COUNT};
+use bun_zstd_decoder::format::BLOCK_HEADER_LEN;
 use bun_zstd_decoder::{Error, Output, Result};
 
 use crate::block::{BlockWriter, Content};
-use crate::entropy::LiteralsPlan;
+use crate::entropy::{LiteralsPlan, count_len};
 use crate::parameters::Tuning;
 use crate::sequences::{
     OffsetValue, Repeats, Sequence, Sequences, count_codes, literals_len, matches_len,
@@ -41,12 +41,10 @@ impl Splitter<'_> {
         let Some(literals_plan) = entropy.literals.plan(literals, self.tuning)? else {
             return Ok(None);
         };
-        let codes_plan = (entropy.codes).plan(sequences, &counts, self.tuning.strategy)?;
-        let count = part.sequences.len();
-        let headers_len = BLOCK_HEADER_LEN
-            + 2
-            + usize::from(count >= 128)
-            + usize::from(count >= LONG_SEQUENCE_COUNT);
+        let codes_plan = entropy
+            .codes
+            .plan(sequences, &counts, self.tuning.strategy)?;
+        let headers_len = BLOCK_HEADER_LEN + count_len(sequences.len()) + 1;
         let overhead = LiteralsPlan::overhead(literals.len());
         Ok(Some(
             headers_len

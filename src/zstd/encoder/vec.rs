@@ -26,14 +26,6 @@ pub(crate) fn write_at(vec: &mut Vec<u8>, position: usize, mut bytes: &[u8]) {
     }
 }
 
-/// Does nothing if there is no room.
-#[inline(always)]
-pub(crate) fn push_into_room<T>(vec: &mut Vec<T>, item: T) {
-    if vec.len() < vec.capacity() {
-        vec.push(item);
-    }
-}
-
 pub(crate) fn copied<T: Copy>(from: &[T]) -> Result<Vec<T>> {
     let mut vec = with_room(from.len())?;
     vec.extend_from_slice(from);

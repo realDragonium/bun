@@ -203,22 +203,15 @@ impl<'a> History<'a> {
         )
     }
 
-    /// `None` unless the bytes are in one run.
+    /// `None` unless the bytes are in one run. For when it is hard to predict which.
     #[inline(always)]
     pub(crate) fn u32_at_index(&self, index: u32) -> Option<u32> {
-        u32_at(self.prefix, self.position(index))
-            .or_else(|| u32_at(self.older, self.older_position(index)))
-    }
-
-    /// The same for when it is hard to predict which.
-    #[inline(always)]
-    pub(crate) fn u32_at_any_index(&self, index: u32) -> Option<u32> {
         let (run, at) = self.locate(index);
         likely(u32_at(run, at))
     }
 
     #[inline(always)]
-    pub(crate) fn u64_at_any_index(&self, index: u32) -> Option<u64> {
+    pub(crate) fn u64_at_index(&self, index: u32) -> Option<u64> {
         let (run, at) = self.locate(index);
         likely(u64_at(run, at))
     }

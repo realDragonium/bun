@@ -1,6 +1,6 @@
 //! Takes a match only if none of the next positions has a better one.
 
-use core::convert::{Infallible, identity};
+use core::convert::Infallible;
 
 use bun_highway::with_bmi2;
 
@@ -76,7 +76,7 @@ impl Longest {
         self.note(history, len, self.at.wrapping_sub(earlier))
     }
 
-    /// The same for a position in the older run.
+    /// [`consider_position`](Self::consider_position) for one in the older run.
     #[inline(always)]
     pub(super) fn consider_older(&mut self, history: &History<'_>, earlier: u32) -> Option<()> {
         let tail = likely(u32_at(
@@ -195,14 +195,12 @@ impl Parser<'_> {
     /// Returns from which index on the tables are not up to date.
     #[inline(never)]
     fn run<const REACH: Reach, F: Finder>(self, finder: F, progress: &mut Progress<'_>) -> u32 {
-        let run = identity(
-            #[inline(always)]
-            move || {
-                let (mut finder, history) = (finder, self.history);
-                self.parse::<REACH, _>(&mut finder, progress);
-                finder.finish(&history)
-            },
-        );
+        let run = #[inline(always)]
+        move || {
+            let (mut finder, history) = (finder, self.history);
+            self.parse::<REACH, _>(&mut finder, progress);
+            finder.finish(&history)
+        };
         if F::GAINS_FROM_BMI2 {
             with_bmi2(run)
         } else {
@@ -214,10 +212,10 @@ impl Parser<'_> {
     #[inline(always)]
     fn repeat_len<const REACH: Reach>(&self, at: u32, offset: u32) -> Option<u32> {
         let history = &self.history;
-        let value = Some(likely(u32_at(history.prefix, at))?);
+        let value = likely(u32_at(history.prefix, at))?;
         if REACH == Reach::Prefix {
             let earlier = at.wrapping_sub(offset);
-            return (earlier < at && u32_at(history.prefix, earlier) == value)
+            return (earlier < at && u32_at(history.prefix, earlier) == Some(value))
                 .then(|| 4 + history.match_len(at + 4, earlier + 4));
         }
         let current = history.index(at);
@@ -225,9 +223,9 @@ impl Parser<'_> {
         let repeats = match REACH {
             Reach::Older => {
                 offset.wrapping_sub(1) < current - self.bounds.lowest(current)
-                    && history.u32_at_index(earlier) == value
+                    && history.has_at(at.wrapping_sub(offset), value)
             }
-            _ => history.u32_at_any_index(earlier) == value && offset != 0,
+            _ => history.u32_at_index(earlier) == Some(value) && offset != 0,
         };
         repeats.then(|| history.match_len_at_index(at, earlier, 4))
     }

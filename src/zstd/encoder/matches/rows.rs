@@ -1,6 +1,5 @@
 //! Rows of the most recent positions with about the same hash. Tags have more bits of it.
 
-use core::convert::identity;
 use core::hint::{black_box, cold_path};
 use core::ops::Range;
 
@@ -29,13 +28,11 @@ pub(super) fn fill(state: &mut MatchState, history: &History<'_>, end: u32) {
 /// The head of a row, and from there on one bit for each entry that has `tag`.
 #[inline(always)]
 fn matching<const N: usize>(tags: &[u8; N], tag: u8) -> (u32, u64) {
-    let of_chunk = identity(
-        #[inline(always)]
-        |index: usize| match tags.as_chunks().0.get(index) {
-            Some(chunk) => u32::from(equal_bytes(chunk, &[tag; 16])),
-            None => 0,
-        },
-    );
+    let of_chunk = #[inline(always)]
+    |index: usize| match tags.as_chunks().0.get(index) {
+        Some(chunk) => u32::from(equal_bytes(chunk, &[tag; 16])),
+        None => 0,
+    };
     let (low, mut high) = (
         of_chunk(0) | of_chunk(1) << 16,
         of_chunk(2) | of_chunk(3) << 16,

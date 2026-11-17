@@ -118,7 +118,8 @@ impl Candidates {
                 ..*search
             };
             let anchor = state.search(&search, sequences, repeats);
-            (self.position).advance(&self.list, history.block().len() as u32);
+            self.position
+                .advance(&self.list, history.block().len() as u32);
             return anchor;
         }
 
@@ -234,6 +235,7 @@ impl GearHash {
     /// After how many of `bytes` it splits first.
     #[inline(always)]
     fn next_split(&mut self, bytes: &[u8]) -> Option<usize> {
+        // Keeps its address in a register.
         let table = black_box(&GEAR_TABLE);
         let value = |byte: u8| *table.at(usize::from(byte));
         let (groups, rest) = bytes.as_chunks::<4>();
@@ -436,7 +438,7 @@ impl Finder {
                     literal_len: split.start - before - anchor,
                     match_len: before + after,
                 };
-                vec::push_into_room(&mut candidates.list, candidate);
+                _ = candidates.list.push_within_capacity(candidate);
                 anchor = split.start + after;
                 // A pattern that repeats needs no more than one entry.
                 if anchor > at {

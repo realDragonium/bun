@@ -277,9 +277,9 @@ impl MatchState {
         Self {
             tuning,
             uses_rows: false,
-            window: Window::starting_at(0),
+            window: Window::starting_at(FIRST_INDEX),
             dictionary_end: 0,
-            next_to_index: 0,
+            next_to_index: FIRST_INDEX,
             tables: Tables::default(),
             optimal: None,
         }
@@ -292,21 +292,14 @@ impl MatchState {
         uses_rows: bool,
         owner: Owner,
         loaded_len: usize,
-        is_only_searched: bool,
     ) -> Result<()> {
-        // These searches never index the first byte, which can therefore stand for nothing.
-        let first_index = if is_only_searched && tuning.strategy <= Strategy::DoubleFast {
-            0
-        } else {
-            FIRST_INDEX
-        };
         // Clearing the tables is faster than lowering their indices.
         if self.window.would_overflow(loaded_len + (16 << 20)) {
             self.tables.indices.0.clear();
-            self.window.next = 0;
+            self.window.next = FIRST_INDEX;
         }
         (self.tuning, self.uses_rows) = (tuning, uses_rows);
-        self.window = Window::starting_at(self.window.next.max(first_index));
+        self.window = Window::starting_at(self.window.next.max(FIRST_INDEX));
         self.dictionary_end = 0;
         self.next_to_index = self.window.next;
 
@@ -327,6 +320,22 @@ impl MatchState {
             None => {}
         }
         Ok(())
+    }
+
+    /// For when only searches index. The fast ones leave out the first byte, so 0 can still stand for nothing.
+    pub(crate) fn start_at_0(&mut self, input_len: Option<u64>) {
+        if self.tuning.strategy > Strategy::DoubleFast {
+            return;
+        }
+        if self.window.next != FIRST_INDEX {
+            let indices = self.tables.indices.get_mut::<u32>();
+            let is_worth_clearing = |len| (256..=len).contains(&(indices.len() as u64 / 8));
+            if !input_len.is_some_and(is_worth_clearing) {
+                return;
+            }
+            indices.fill(0);
+        }
+        (self.window, self.next_to_index) = (Window::starting_at(0), 0);
     }
 
     /// How many bytes the tables take, and how many of them are needed.
@@ -579,7 +588,7 @@ mod tests {
         }
         let tuning = request.tuning(None, Purpose::Frame { dictionary_len: 0 });
         let mut state = MatchState::new(tuning);
-        state.reset(tuning, false, Owner::Frame, 0, false)?;
+        state.reset(tuning, false, Owner::Frame, 0)?;
         Ok(state)
     }
 

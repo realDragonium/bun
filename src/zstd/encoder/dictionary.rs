@@ -41,7 +41,10 @@ fn reuse(has_all_symbols: bool) -> Reuse {
 fn read_tables<'a>(mut bytes: &'a [u8], entropy: &mut Entropy) -> Result<(Repeats, &'a [u8])> {
     let description = read_huffman_weights(bytes).map_err(|_| Error::DictionaryCorrupted)?;
     bytes = bytes.get(description.len..).ok_or(Error::Internal)?;
-    let weights = (description.weights.get(..description.symbol_count)).ok_or(Error::Internal)?;
+    let weights = description
+        .weights
+        .get(..description.symbol_count)
+        .ok_or(Error::Internal)?;
     let has_all = weights.len() == 256 && *description.rank_counts.at(0) == 0;
     entropy
         .literals
@@ -58,7 +61,9 @@ fn read_tables<'a>(mut bytes: &'a [u8], entropy: &mut Entropy) -> Result<(Repeat
         MAX_LITERAL_LENGTH_CODE,
         LITERAL_LENGTH_TABLE_LOG_MAX,
     )?;
-    let (repeats, content) = (bytes.split_first_chunk::<12>()).ok_or(Error::DictionaryCorrupted)?;
+    let (repeats, content) = bytes
+        .split_first_chunk::<12>()
+        .ok_or(Error::DictionaryCorrupted)?;
     let repeats = [0, 4, 8].map(|at| u32_at(repeats, at).unwrap_or(0));
     let max_offset = u32::try_from(content.len() + BLOCK_LEN_MAX).unwrap_or(u32::MAX);
     for (kind, counts, max_needed) in [
@@ -81,7 +86,7 @@ impl Dictionary {
     pub(crate) fn new(bytes: &Shared<Vec<u8>>, request: &Request) -> Result<Self> {
         let tuning = request.tuning(None, Purpose::Dictionary { len: bytes.len() });
         let mut state = MatchState::new(tuning);
-        state.reset(tuning, tuning.prefers_rows(), Owner::Dictionary, 0, false)?;
+        state.reset(tuning, tuning.prefers_rows(), Owner::Dictionary, 0)?;
         let mut entropy = Entropy::EMPTY;
 
         let has_tables = bytes.len() >= WORD_LEN && u32_at(bytes, 0) == Some(DICTIONARY_MAGIC);

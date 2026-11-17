@@ -12,7 +12,7 @@ use crate::dictionary::Dictionary;
 use crate::entropy::looks_random;
 use crate::matches::long_distance::{self, Candidates};
 use crate::matches::{MatchState, Owner, Search};
-use crate::parameters::{Plan, Purpose};
+use crate::parameters::{LongMatches, Plan, Purpose};
 use crate::sequences::{Repeats, Sequences};
 use crate::vec::{self, Shared};
 use crate::window::{Input, WORD_LEN};
@@ -142,18 +142,12 @@ impl FrameWriter {
             Start::Frame(_) => 0,
             Start::Part(earlier) => earlier.len(),
         };
-        let is_only_searched = matches!(start, Start::Frame(None)) && !plan.matches_long_distance;
-        (self.state).reset(
-            tuning,
-            plan.uses_rows,
-            Owner::Frame,
-            loaded_len,
-            is_only_searched,
-        )?;
+        self.state
+            .reset(tuning, plan.uses_rows, Owner::Frame, loaded_len)?;
         self.blocks.is_at_start = true;
         self.long_finder = None;
         self.long_matches.clear();
-        if let Some(parameters) = plan.long_distance {
+        if let LongMatches::Own(parameters) = plan.long_matches {
             let parameters = parameters.completed(&tuning);
             self.long_finder = Some(long_distance::Finder::new(parameters, tuning.window_log)?);
             self.long_matches
@@ -164,6 +158,9 @@ impl FrameWriter {
             Start::Frame(None) => {
                 self.blocks.entropy.forget();
                 self.blocks.repeats = Repeats::INITIAL;
+                if let LongMatches::None = plan.long_matches {
+                    self.state.start_at_0(input_len);
+                }
             }
             Start::Frame(Some(dictionary)) => {
                 self.blocks.entropy.copy_from(&dictionary.entropy)?;

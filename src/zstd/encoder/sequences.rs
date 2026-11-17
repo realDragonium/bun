@@ -1,6 +1,5 @@
 //! What the search for matches makes of a block.
 
-use core::convert::identity;
 use core::hint::select_unpredictable;
 
 use bun_highway::with_bmi2;
@@ -336,7 +335,7 @@ impl Sequences {
             extra: u64::from(literal_len) | u64::from(match_len.wrapping_sub(MIN_MATCH)) << 32,
             symbols: offset.0.to_le_bytes(),
         };
-        vec::push_into_room(&mut self.list, found);
+        _ = self.list.push_within_capacity(found);
     }
 
     /// Before they are finished, if there are so few matches in `block` that it is quick to tell.
@@ -360,14 +359,12 @@ impl Sequences {
                     let (literal_len, match_base) =
                         (sequence.extra as u32, (sequence.extra >> 32) as u32);
                     let offset = OffsetValue(u32::from_le_bytes(sequence.symbols));
-                    let mut finish = identity(
-                        #[inline(always)]
-                        |code| {
-                            let coded = Sequence::with_code(code, literal_len, offset, match_base);
-                            count(counts, coded);
-                            *sequence = coded;
-                        },
-                    );
+                    let mut finish = #[inline(always)]
+                    |code| {
+                        let coded = Sequence::with_code(code, literal_len, offset, match_base);
+                        count(counts, coded);
+                        *sequence = coded;
+                    };
                     if literal_len < OVERCOPY as u32
                         && let Some(chunk) = likely(chunk_at::<OVERCOPY>(block, from))
                         && let Some(room) = likely(chunk_at_mut(literals, to))

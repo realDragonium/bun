@@ -255,7 +255,7 @@ impl Prices {
         }
     }
 
-    /// The same from `len` on, if they are short.
+    /// [`match_len`](Self::match_len) from `len` on, if they are short.
     #[inline(always)]
     pub(super) fn short_match_lens(&self, len: u32) -> Option<&[i32; LANES]> {
         let base = (len - MIN_MATCH) as usize;

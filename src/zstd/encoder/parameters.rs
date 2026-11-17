@@ -371,17 +371,29 @@ impl Request {
         let is_optimal = tuning.strategy >= Strategy::Optimal;
         let matches_long_distance = self
             .matches_long_distance
-            .unwrap_or(is_optimal && tuning.window_log >= 27);
+            .unwrap_or(is_optimal && tuning.window_log >= WINDOW_LOG_LIMIT_DEFAULT);
         Plan {
             tuning,
             uses_rows: tuning.prefers_rows(),
             splits_blocks: is_optimal && tuning.window_log >= 17,
-            matches_long_distance,
-            long_distance: matches_long_distance.then_some(self.long_distance),
+            long_matches: if matches_long_distance {
+                LongMatches::Own(self.long_distance)
+            } else {
+                LongMatches::None
+            },
             target_block_len: self.target_block_len,
             header: self.header,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum LongMatches {
+    None,
+    /// Not yet [`completed`](LongDistance::completed): a dictionary has a say in the tuning.
+    Own(LongDistance),
+    /// From a finder that sees more of the input.
+    Given,
 }
 
 /// What a frame is compressed with.
@@ -390,9 +402,7 @@ pub(crate) struct Plan {
     pub(crate) tuning: Tuning,
     pub(crate) uses_rows: bool,
     pub(crate) splits_blocks: bool,
-    pub(crate) matches_long_distance: bool,
-    /// For who finds those matches. Not yet [`completed`](LongDistance::completed): a dictionary has a say in the tuning.
-    pub(crate) long_distance: Option<LongDistance>,
+    pub(crate) long_matches: LongMatches,
     /// 0 for none.
     pub(crate) target_block_len: usize,
     pub(crate) header: HeaderFlags,
@@ -543,7 +553,7 @@ mod tests {
             let actual = [
                 plan.uses_rows,
                 plan.splits_blocks,
-                plan.long_distance.is_some(),
+                matches!(plan.long_matches, LongMatches::Own(_)),
             ];
             assert_eq!(actual, expected, "{window_log} {strategy}");
         }

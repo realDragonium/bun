@@ -1,7 +1,7 @@
 //! A hash table for matches of 8 bytes, which are preferred, and one for shorter ones.
 
 use core::cell::Cell;
-use core::convert::{Infallible, identity};
+use core::convert::Infallible;
 
 use bun_highway::{out_of_line, with_bmi2};
 
@@ -377,7 +377,7 @@ impl<'a> Searcher<'a> {
             let word = likely(u64_at(history.prefix, at))?;
             let current = history.index(at);
             let earlier = current.wrapping_sub(progress.second);
-            if history.u32_at_any_index(earlier) != Some(word as u32) || progress.second == 0 {
+            if history.u32_at_index(earlier) != Some(word as u32) || progress.second == 0 {
                 return Some(at);
             }
             let end = at + history.match_len_at_index(at, earlier, 4);
@@ -403,11 +403,11 @@ impl<'a> Searcher<'a> {
 
             let found = if history.has_at(back, (word >> 8) as u32) && progress.recent != 0 {
                 Match::repeat(at + 1, history.index(back))
-            } else if history.u64_at_any_index(long) == Some(word) && long != lowest {
+            } else if history.u64_at_index(long) == Some(word) && long != lowest {
                 Match::new(at, long, 8)
-            } else if history.u32_at_any_index(short) == Some(word as u32) && short != lowest {
+            } else if history.u32_at_index(short) == Some(word as u32) && short != lowest {
                 let long = self.long_entry(next_word)?.replace(current + 1);
-                if history.u64_at_any_index(long) == Some(next_word) && long != lowest {
+                if history.u64_at_index(long) == Some(next_word) && long != lowest {
                     Match::new(at + 1, long, 8)
                 } else {
                     Match::new(at, short, 4)
@@ -445,33 +445,27 @@ impl<'a> Searcher<'a> {
                 own.hash(word)
             }))
         };
-        let find_long = identity(
-            #[inline(always)]
-            |candidate: u32, tagged: Tagged, word: u64| {
-                let position = history.position(candidate) as usize;
-                if words.matches_at::<true>(position, |it| it == word) {
-                    return Some(candidate);
-                }
-                let index = tagged.index()?;
-                (u64_at(history.older, Attached::position(index)) == Some(word))
-                    .then(|| index.wrapping_add(attached.delta))
-            },
-        );
-        let find_short = identity(
-            #[inline(always)]
-            |candidate: u32, tagged: Tagged, word: u64| {
-                let position = history.position(candidate) as usize;
-                if words.matches_at::<true>(position, |it| it as u32 == word as u32)
-                    && position != 0
-                {
-                    return Some(candidate);
-                }
-                let index = tagged.index()?;
-                (candidate <= history.prefix_index
-                    && u32_at(history.older, Attached::position(index)) == Some(word as u32))
+        let find_long = #[inline(always)]
+        |candidate: u32, tagged: Tagged, word: u64| {
+            let position = history.position(candidate) as usize;
+            if words.matches_at::<true>(position, |it| it == word) {
+                return Some(candidate);
+            }
+            let index = tagged.index()?;
+            (u64_at(history.older, Attached::position(index)) == Some(word))
                 .then(|| index.wrapping_add(attached.delta))
-            },
-        );
+        };
+        let find_short = #[inline(always)]
+        |candidate: u32, tagged: Tagged, word: u64| {
+            let position = history.position(candidate) as usize;
+            if words.matches_at::<true>(position, |it| it as u32 == word as u32) && position != 0 {
+                return Some(candidate);
+            }
+            let index = tagged.index()?;
+            (candidate <= history.prefix_index
+                && u32_at(history.older, Attached::position(index)) == Some(word as u32))
+            .then(|| index.wrapping_add(attached.delta))
+        };
 
         let mut at = history.start;
         loop {

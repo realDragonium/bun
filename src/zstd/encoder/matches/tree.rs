@@ -218,6 +218,7 @@ impl<'a> Tree<'a> {
         };
         prefetch(self.roots, self.hasher.hash(word_in::<1, _>(words)));
         if let Some(&root) = self.roots.get(self.hasher.hash(word_in::<0, _>(words))) {
+            let root = root.max(history.prefix_index);
             prefetch(history.prefix, history.position(root) as usize);
             prefetch(nodes.nodes, (root & nodes.mask) as usize);
         }

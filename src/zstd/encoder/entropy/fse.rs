@@ -188,9 +188,11 @@ impl Normalized {
         let mut position = 0;
         let mut bits = self.table_log - FSE_TABLE_LOG_MIN;
         let mut bit_count = 4;
-        let mut put_16_bits = |bits: u32, position: u32| {
+        let mut move_16_bits = |bits: &mut u32| {
             let pair = chunk_at_mut(out, position).ok_or(Error::DstSizeTooSmall)?;
-            *pair = (bits as u16).to_le_bytes();
+            *pair = (*bits as u16).to_le_bytes();
+            *bits >>= 16;
+            position += 2;
             Ok::<_, Error>(())
         };
 
@@ -206,9 +208,7 @@ impl Normalized {
                 while zeros >= 24 {
                     zeros -= 24;
                     bits += 0xFFFF << bit_count;
-                    put_16_bits(bits, position)?;
-                    position += 2;
-                    bits >>= 16;
+                    move_16_bits(&mut bits)?;
                 }
                 while zeros >= 3 {
                     zeros -= 3;
@@ -218,9 +218,7 @@ impl Normalized {
                 bits += (zeros as u32) << bit_count;
                 bit_count += 2;
                 if bit_count > 16 {
-                    put_16_bits(bits, position)?;
-                    position += 2;
-                    bits >>= 16;
+                    move_16_bits(&mut bits)?;
                     bit_count -= 16;
                 }
             }
@@ -243,14 +241,12 @@ impl Normalized {
                 threshold >>= 1;
             }
             if bit_count > 16 {
-                put_16_bits(bits, position)?;
-                position += 2;
-                bits >>= 16;
+                move_16_bits(&mut bits)?;
                 bit_count -= 16;
             }
         }
-        put_16_bits(bits, position)?;
-        Ok((position + bit_count.div_ceil(8)) as usize)
+        move_16_bits(&mut bits)?;
+        Ok((position - 2 + bit_count.div_ceil(8)) as usize)
     }
 }
 

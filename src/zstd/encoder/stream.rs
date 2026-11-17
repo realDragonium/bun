@@ -107,7 +107,9 @@ impl Buffered {
                 small_frames: 0,
             })?,
         };
-        (frame.writer).start(plan, input_len, Start::Frame(dictionary))?;
+        frame
+            .writer
+            .start(plan, input_len, Start::Frame(dictionary))?;
         let block_len = frame.writer.block_len_max();
         frame.capacity = frame.writer.window_len() + block_len;
         (frame.older, frame.start, frame.filled) = (Older::InDictionary, 0, 0);
@@ -119,10 +121,12 @@ impl Buffered {
 
     /// Whether the next frame should take over the memory.
     fn is_worth_keeping(&mut self) -> bool {
+        const OVERSIZE_FACTOR: usize = 3;
+        const SMALL_FRAMES_MAX: u32 = 128;
         let [held, needed] = self.writer.tables_len();
-        let is_small = held + self.buffer.capacity() >= 3 * (needed + self.capacity);
+        let is_small = held + self.buffer.capacity() >= OVERSIZE_FACTOR * (needed + self.capacity);
         self.small_frames = if is_small { self.small_frames + 1 } else { 0 };
-        self.small_frames < 128
+        self.small_frames < SMALL_FRAMES_MAX
     }
 
     /// What is left of the older segment, if the buffer is overwritten up to `overwritten`.
@@ -244,6 +248,7 @@ pub struct Encoder {
     frame: Option<Frame>,
     /// The next one takes over its memory.
     finished: Option<Box<Buffered>>,
+    /// Waits for the jobs of `frame`, so it has to be dropped after it.
     pool: Pool,
     error: Option<Error>,
 }

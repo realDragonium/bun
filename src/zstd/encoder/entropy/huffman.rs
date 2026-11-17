@@ -10,6 +10,8 @@ use super::fse::{self, Normalized};
 use super::histogram::Histogram;
 use crate::bytes::{highest_bit, likely, put};
 
+/// In front of four streams.
+pub(super) const JUMP_TABLE_LEN: usize = 6;
 const DESCRIPTION_LEN_MAX: usize = 128;
 const CODE_LEN_MAX: u32 = 11;
 const RANKS: usize = 16;
@@ -541,7 +543,6 @@ impl Table {
     }
 
     fn compress_4_streams(&self, symbols: &[u8], out: &mut [u8]) -> Option<usize> {
-        const JUMP_TABLE_LEN: usize = 6;
         if out.len() < JUMP_TABLE_LEN + 3 + 8 || symbols.len() < 12 {
             return None;
         }

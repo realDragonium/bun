@@ -11,7 +11,7 @@ use crate::channel::{self, Receiver, Sender};
 use crate::dictionary::Dictionary;
 use crate::frame::{self, FrameWriter, Interest, Start};
 use crate::matches::long_distance::{Candidates, Finder};
-use crate::parameters::{LongDistance, Plan, Request, Strategy};
+use crate::parameters::{LongDistance, LongMatches, Plan, Request, Strategy};
 use crate::stream::{Backlog, EndDirective};
 use crate::vec::{self, Shared};
 use crate::window::Input;
@@ -56,7 +56,8 @@ impl LongMatcher {
         candidates.clear_for(self.section_len, &self.parameters)?;
         self.finder.admit(&input);
         let is_lost = || interest.ensure().is_err();
-        (self.finder).find(&input, start, section.len(), candidates, is_lost);
+        self.finder
+            .find(&input, start, section.len(), candidates, is_lost);
         interest.ensure()
     }
 }
@@ -110,7 +111,10 @@ impl Worker {
         if let Some(hash) = &mut relay.hash {
             hash.update(section);
         }
-        (job.next_relay.take().ok_or(Error::Internal)?).send_last(relay);
+        job.next_relay
+            .take()
+            .ok_or(Error::Internal)?
+            .send_last(relay);
         job.interest.ensure()?;
 
         let (len, dictionary, start) = match &job.frame {
@@ -120,7 +124,9 @@ impl Worker {
             }
             None => (Some(section.len() as u64), None, Start::Part(earlier)),
         };
-        let writer = (self.writer).get_or_insert_with(|| FrameWriter::new(job.plan));
+        let writer = self
+            .writer
+            .get_or_insert_with(|| FrameWriter::new(job.plan));
         writer.interest = job.interest.clone();
         writer.start(job.plan, len, start)?;
         core::mem::swap(&mut writer.long_matches, &mut self.long_matches);
@@ -167,9 +173,9 @@ impl Worker {
 fn section_and_overlap_len(plan: &Plan, request: &Request) -> (usize, usize) {
     let tuning = &plan.tuning;
     // For long distances the window is too large to go by.
-    let section_log = match plan.long_distance {
-        Some(_) => (tuning.cycle_log() + 3).max(21),
-        None => (tuning.window_log + 2).max(20),
+    let section_log = match plan.long_matches {
+        LongMatches::None => (tuning.window_log + 2).max(20),
+        _ => (tuning.cycle_log() + 3).max(21),
     };
     let section_log = section_log.min(30);
     let overlap_log = match (request.overlap_log, tuning.strategy) {
@@ -179,10 +185,10 @@ fn section_and_overlap_len(plan: &Plan, request: &Request) -> (usize, usize) {
         (0, _) => 6,
         (log, _) => log,
     };
-    let overlap_len = match plan.long_distance {
-        Some(_) => 1 << (tuning.window_log.min(section_log - 2) - (9 - overlap_log)),
-        None if overlap_log > 1 => 1 << (tuning.window_log - (9 - overlap_log)),
-        None => 0,
+    let overlap_len = match plan.long_matches {
+        LongMatches::None if overlap_log > 1 => 1 << (tuning.window_log - (9 - overlap_log)),
+        LongMatches::None => 0,
+        _ => 1 << (tuning.window_log.min(section_log - 2) - (9 - overlap_log)),
     };
     let section_len = match request.job_len {
         0 => 1 << section_log,
@@ -220,7 +226,6 @@ impl Pool {
     }
 }
 
-/// To be dropped after the frames whose jobs it has, so that they end soon.
 impl Drop for Pool {
     fn drop(&mut self) {
         self.jobs = None;
@@ -267,8 +272,9 @@ impl Workers {
         pool.prepare(1)?;
         let (section_len, overlap_len) = section_and_overlap_len(&plan, request);
         let window_log = plan.tuning.window_log;
-        let long_matcher = match plan.long_distance.take() {
-            Some(parameters) => {
+        let long_matcher = match plan.long_matches {
+            LongMatches::Own(parameters) => {
+                plan.long_matches = LongMatches::Given;
                 let parameters = parameters.completed(&plan.tuning);
                 Some(LongMatcher {
                     parameters,
@@ -279,7 +285,7 @@ impl Workers {
                     section_len,
                 })
             }
-            None => None,
+            _ => None,
         };
         let (sender, relay) = channel::new()?;
         sender.send_last(allocate(|| Relay {
@@ -382,7 +388,7 @@ impl Workers {
             Report::Output(bytes) => self.backlog = Backlog::of(bytes),
             Report::Done(input) => {
                 self.reports.pop_front();
-                vec::push_into_room(&mut self.spare_inputs, input);
+                _ = self.spare_inputs.push_within_capacity(input);
             }
             Report::Failed(error) => return Err(error),
         }

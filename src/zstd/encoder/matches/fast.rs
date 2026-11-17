@@ -311,7 +311,7 @@ impl<'a> Searcher<'a> {
         self.insert(at - 2)?;
         loop {
             let earlier = history.index(at).wrapping_sub(progress.second);
-            if history.u32_at_any_index(earlier) != Some(word as u32) || progress.second == 0 {
+            if history.u32_at_index(earlier) != Some(word as u32) || progress.second == 0 {
                 return Some(at);
             }
             let end = at + history.match_len_at_index(at, earlier, 4);
@@ -330,7 +330,7 @@ impl<'a> Searcher<'a> {
         self.history.prefix = chunks.bytes;
         let history = &self.history;
         let index = |at: usize| history.index(at as u32);
-        let has_at_index = |index, value| history.u32_at_any_index(index) == Some(value);
+        let has_at_index = |index, value| history.u32_at_index(index) == Some(value);
         let mut at = history.start as usize;
 
         loop {

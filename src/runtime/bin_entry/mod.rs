@@ -38,6 +38,7 @@ mod c_abi_exports;
 // (`sys_epoll_pwait2`, …) reach the linker.
 use bun_platform as _;
 
+// Likewise, for the allocator and for what the hook of ICU calls.
 use bun_global_allocator as _;
 use bun_icu_data as _;
 

@@ -1,4 +1,4 @@
-//! The zstd encoder. Derived from zstd 1.5.7 (LICENSE.md), whose output it reproduces.
+//! The zstd encoder. Derived from zstd 1.5.7 (LICENSE.md), whose output it reproduces, and whose numbers it uses.
 #![forbid(unsafe_code)]
 // Input, dictionaries and parameters come from anywhere and a panic aborts the process.
 #![deny(
@@ -11,7 +11,13 @@
 #![warn(unused_must_use)]
 // What is generic over a constant is so for its loops.
 #![cfg_attr(mordant, allow(generic_body_not_generic))]
-#![feature(adt_const_params, allocator_ext, hint_prefetch)]
+#![feature(
+    adt_const_params,
+    allocator_ext,
+    hint_prefetch,
+    stmt_expr_attributes,
+    vec_push_within_capacity
+)]
 
 mod block;
 mod bytes;
@@ -48,7 +54,8 @@ fn worst_case_len(len: usize) -> usize {
 
 /// The room that [`compress`] can need for `len` bytes. `None` if that is too many.
 pub fn compress_bound(len: usize) -> Option<usize> {
-    (len < 0xFF00_FF00_FF00_FF00).then(|| worst_case_len(len))
+    const TOO_MANY: usize = 0xFF00_FF00_FF00_FF00;
+    (len < TOO_MANY).then(|| worst_case_len(len))
 }
 
 /// Writes `bytes` as one frame.
