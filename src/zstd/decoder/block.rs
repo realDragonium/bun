@@ -172,6 +172,7 @@ impl BlockDecoder {
 const SCATTERED_TABLES_COUNT_MAX: usize = 10;
 
 /// Returns where the table of each [`CodeKind`] is, and what follows their descriptions in `src`.
+#[inline(always)]
 fn select_tables<'t, 's>(
     src: &'s [u8],
     count: usize,

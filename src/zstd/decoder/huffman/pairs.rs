@@ -200,8 +200,7 @@ pub(crate) const AMPLE_ROOM: usize = BLOCK_LEN_MAX + ROUND_ROOM;
 /// With less left to fill, a lane is through.
 const ROOM_MIN: usize = 4 * LOOKUPS;
 
-/// Lanes do not go at the same pace. Those that are through repeat what another does, as long as two are busy. Returns
-/// the least room that one of these has, or 0.
+/// Lanes that are through repeat what another does. Returns the least room of a busy one, or 0 if there are not two.
 #[inline(never)]
 fn follow_a_busy_lane(lanes: &mut [Lane; 4], rooms: [usize; 4]) -> usize {
     let mut busy = (0..4).filter(|&lane| *rooms.at(lane) >= ROOM_MIN);

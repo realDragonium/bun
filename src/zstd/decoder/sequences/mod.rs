@@ -39,8 +39,7 @@ struct Queue<'a> {
     pending: usize,
 }
 
-/// Reads a sequence, and runs the one `AHEAD` before it, until either needs care. That way the reader goes on while the
-/// processor recovers from a wrong guess about the copies, and with more of a lead far matches arrive in time.
+/// Reads a sequence and runs the one `AHEAD` before it, which hides wrong guesses and far loads, until either needs care.
 #[inline(always)]
 fn read_and_run<const AHEAD: usize>(
     reader: &mut Reader<'_>,

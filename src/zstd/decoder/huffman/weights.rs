@@ -107,8 +107,7 @@ impl HuffmanWeights {
         self.symbol_count.div_ceil(4)
     }
 
-    /// Calls `visit` with a quarter, a symbol in it and its weight. It takes turns with the quarters, since neighbors
-    /// tend to have the same weight, and would have to wait for each other to update what goes by it.
+    /// `visit` gets a quarter, a symbol and its weight. Neighbors, which tend to be equal, would wait for each other.
     #[inline(always)]
     pub(super) fn for_each_in_quarters(&self, mut visit: impl FnMut(usize, u8, usize)) {
         let len = self.quarter_len();

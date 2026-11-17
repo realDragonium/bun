@@ -8,6 +8,9 @@ use crate::format::{BLOCK_LEN_MAX, CodeKind, DICTIONARY_MAGIC};
 use crate::huffman::HuffmanTable;
 use crate::sequences::SequenceTables;
 
+/// The largest that a sequence can spell out. The last values stand for repeated offsets in the decoder.
+const OFFSET_MAX: u32 = u32::MAX - 3;
+
 /// What frames can refer to besides their own content.
 pub struct Dictionary<'a> {
     bytes: Cow<'a, [u8]>,
@@ -103,7 +106,7 @@ impl Entropy {
             .ok_or(Error::CorruptionDetected)?;
         for (to, from) in self.repeat_offsets.iter_mut().zip(offsets.as_chunks().0) {
             *to = u32::from_le_bytes(*from);
-            if *to == 0 || *to as usize > content.len() {
+            if !(1..=OFFSET_MAX).contains(to) || *to as usize > content.len() {
                 return Err(Error::CorruptionDetected);
             }
         }

@@ -24,8 +24,7 @@ impl StreamingDecoder {
         matches!(self.state, State::Inflating)
     }
 
-    /// Appends to `out` until `input` is consumed or `out.len()` reaches `max_output`. Returns how much it consumed, or
-    /// `ShortRead` if a frame needs more input and `is_done` is false.
+    /// Grows `out` up to `max_output`. Returns how much it consumed, or `ShortRead` if a frame waits for more to come.
     pub fn decompress(
         &mut self,
         input: &[u8],

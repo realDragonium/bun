@@ -96,11 +96,11 @@ mod tests {
     fn decompressed(item: &[u8], length: i32, size: usize) -> Option<Vec<u8>> {
         let mut out = Vec::with_capacity(size);
         let (dictionary, len) = (DICTIONARY.as_ptr(), DICTIONARY.len());
-        // SAFETY: as above. The dictionary is static, and `size` bytes of `out` get written in any case.
+        // SAFETY: as above. The dictionary is static, and success means that `size` bytes of `out` are initialized.
         unsafe {
             let (item, room) = (item.as_ptr(), out.as_mut_ptr());
             let is_done = Bun__ICUItem__decompress(item, length, dictionary, len, room, size);
-            out.set_len(size);
+            out.set_len(if is_done { size } else { 0 });
             is_done.then_some(out)
         }
     }

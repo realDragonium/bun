@@ -119,8 +119,7 @@ impl Lane {
 pub(super) const ROUNDS_MAX: usize = 32;
 const _: () = assert!(7 + ROUNDS_MAX * LOOKUPS * QUICK_LOG as usize <= 8 * 255);
 
-/// Does `rounds` rounds of lookups in all lanes. `find` returns the row for the next bits and how many of them it takes.
-/// `write` gets the lane, the round, the lookup in it, and that row.
+/// `find` returns the row for the next bits and how many it takes. `write` gets the lane, round, lookup and row.
 #[inline(always)]
 pub(super) fn interleave(
     windows: &Windows<'_>,

@@ -16,7 +16,6 @@ use crate::xxhash::XxHash64;
 /// `ZSTD_d_windowLogMax`
 const WINDOW_LOG_MAX_KEY: u32 = 100;
 const WINDOW_SIZE_MAX_DEFAULT: u64 = (1 << WINDOW_LOG_LIMIT_DEFAULT) + 1;
-const IDLE_STEPS_MAX: u32 = 16;
 /// The ring shrinks once it has been this many times too large...
 const OVERSIZE_FACTOR: usize = 3;
 /// ...for this many frames in a row.
@@ -85,7 +84,6 @@ pub struct Decoder {
     /// The start of a [`Part`] that has to be in one piece.
     gathered: Vec<u8>,
     ring: Ring,
-    idle_steps: u32,
     error: Option<Error>,
 }
 
@@ -103,9 +101,11 @@ fn read_header(
 ) -> Result<Header> {
     let mut src = *input;
     if *len != 0 || src.len() < FRAME_HEADER_LEN_MAX {
-        let room = gathered.iter_mut().skip(*len);
-        let added = room.zip(*input).map(|(to, from)| *to = *from).count();
-        src = gathered.get(..*len + added).ok_or(Error::Internal)?;
+        let end = FRAME_HEADER_LEN_MAX.min(*len + src.len());
+        for (to, from) in gathered.iter_mut().skip(*len).zip(src) {
+            *to = *from;
+        }
+        src = gathered.get(..end).ok_or(Error::Internal)?;
     }
     let header = Header::read(src)?;
     *len += take_up_to(input, header.len() - *len).len();
@@ -121,7 +121,6 @@ impl Decoder {
             window_size_max: WINDOW_SIZE_MAX_DEFAULT,
             gathered: Vec::new(),
             ring: Ring::default(),
-            idle_steps: 0,
             error: None,
         }
     }
@@ -162,8 +161,7 @@ impl Decoder {
         self.error = None;
     }
 
-    /// Goes as far as `input` and the room in `out` allow, up to the end of a frame. Returns how much of `input` it
-    /// consumed. An error takes back what the step wrote, and stays until [`reset_session`](Self::reset_session).
+    /// Stops at the end of a frame. Returns how much it consumed. An error takes back what it wrote, and stays.
     pub fn step(&mut self, input: &[u8], out: &mut Output<'_>) -> (usize, Result<Status>) {
         let written = out.written();
         match self.error.map_or_else(|| self.try_step(input, out), Err) {
@@ -207,7 +205,6 @@ impl Decoder {
     }
 
     fn try_step(&mut self, input: &[u8], out: &mut Output<'_>) -> Result<(usize, Status)> {
-        let written = out.written();
         let mut rest = input;
         if let Stage::Idle = self.stage {
             self.stage = Stage::Header {
@@ -247,18 +244,6 @@ impl Decoder {
         self.decode_body(&mut rest, out)?;
 
         let consumed = input.len() - rest.len();
-        if consumed != 0 || out.written() != written {
-            self.idle_steps = 0;
-        } else {
-            self.idle_steps = self.idle_steps.saturating_add(1);
-            if self.idle_steps >= IDLE_STEPS_MAX && out.room() == 0 {
-                return Err(Error::NoForwardProgressDestFull);
-            }
-            if self.idle_steps >= IDLE_STEPS_MAX && rest.is_empty() {
-                return Err(Error::NoForwardProgressInputEmpty);
-            }
-        }
-
         let frame = match &mut self.stage {
             Stage::Body(frame) if matches!(frame.next, Part::Nothing) => frame,
             Stage::Skipped { left: 0 } => {

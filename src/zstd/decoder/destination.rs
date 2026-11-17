@@ -150,8 +150,7 @@ impl<'o, 'a> Destination<'o, 'a> {
         Ok(())
     }
 
-    /// Has `write` write the start of the block. It returns the length of that, and what else there is to return. For a
-    /// short frame that leaves no room for the overshoot, it gets a stand-in that has it.
+    /// `write` writes the start of the block and returns its length. A short, tight output gets a stand-in for that.
     #[inline(always)]
     pub(crate) fn with_overshoot<T>(
         &mut self,

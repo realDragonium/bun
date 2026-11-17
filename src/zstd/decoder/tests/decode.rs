@@ -102,12 +102,13 @@ fn stream(
     out: &mut Vec<u8>,
 ) -> Result<()> {
     loop {
-        let input = &src[..input_step.min(src.len())];
+        let (input, written) = (&src[..input_step.min(src.len())], out.len());
         let (consumed, status) = decoder.step(input, &mut Output::spare_capacity(out, output_step));
         src = &src[consumed..];
         if status? == Status::Complete && src.is_empty() {
             return Ok(());
         }
+        assert!(consumed != 0 || out.len() != written);
     }
 }
 
@@ -315,6 +316,10 @@ fn invalid_frames_are_refused() {
             "28b52ffd 200d 350000 106162 04 00 b0",
             Error::CorruptionDetected,
         ),
+        (
+            "28b52ffd 802c 0b000000 450000 310f 01 54 140202 07",
+            Error::CorruptionDetected,
+        ),
         ("28b52ffd 0000 150000 00 01", Error::SrcSizeWrong),
         ("28b52ffd 0000 150000 08 61", Error::SrcSizeWrong),
         ("28b52ffd 0000 150000 10 61", Error::CorruptionDetected),
@@ -423,20 +428,19 @@ fn the_last_byte_is_consumed_when_all_output_is_out() {
 }
 
 #[test]
-fn steps_that_get_nowhere_fail_in_the_end() {
-    let frame = hex("28b52ffd 0000 180000 616263");
-    let cases = [
-        (0, Error::NoForwardProgressDestFull),
-        (9, Error::NoForwardProgressInputEmpty),
-    ];
-    for (room, error) in cases {
-        let mut decoder = Decoder::new();
-        assert_eq!(step(&mut decoder, &frame, room).0, frame.len());
-        for _ in 0..15 {
-            assert_eq!(step(&mut decoder, &[], room), (0, 0, Ok(Status::Pending)));
-        }
-        assert_eq!(step(&mut decoder, &[], room), (0, 0, Err(error)));
+fn a_frame_waits_for_input_and_room() {
+    let frame = hex("28b52ffd 0000 190000 616263");
+    let mut decoder = Decoder::new();
+    assert_eq!(step(&mut decoder, &frame[..11], 0).0, 11);
+    for _ in 0..20 {
+        assert_eq!(step(&mut decoder, &[], 0), (0, 0, Ok(Status::Pending)));
     }
+    assert_eq!(step(&mut decoder, &[], 9), (0, 2, Ok(Status::Pending)));
+    for _ in 0..20 {
+        assert_eq!(step(&mut decoder, &[], 9), (0, 0, Ok(Status::Pending)));
+    }
+    let rest = step(&mut decoder, &frame[11..], 9);
+    assert_eq!(rest, (1, 1, Ok(Status::Complete)));
 }
 
 #[test]
@@ -491,11 +495,8 @@ fn a_new_session_keeps_the_settings() -> Result<()> {
 fn a_new_session_starts_from_nothing() {
     let mut decoder = Decoder::new();
     let frame = hex("28b52ffd 0000 190000 616263");
-    // Two of the three bytes of a block header, and steps that got nowhere
+    // Two of the three bytes of a block header
     assert_eq!(step(&mut decoder, &frame[..8], 9).0, 8);
-    for _ in 0..15 {
-        assert_eq!(step(&mut decoder, &[], 9), (0, 0, Ok(Status::Pending)));
-    }
     decoder.reset_session();
     assert_eq!(step(&mut decoder, &frame, 9), (12, 3, Ok(Status::Complete)));
 }

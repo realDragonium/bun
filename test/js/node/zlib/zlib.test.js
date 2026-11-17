@@ -1032,6 +1032,22 @@ describe("zlib.zstd", () => {
     expect(zlib.zstdDecompressSync(Buffer.concat([f1, f2])).toString()).toBe("first\nsecond\n");
   });
 
+  // Node gives up after 16 of them, with ZSTD_error_noForwardProgress_inputEmpty.
+  it.each([
+    ["empty writes", decoder => decoder.write(Buffer.alloc(0))],
+    ["flushes", decoder => decoder.flush()],
+  ])("accepts any number of %s inside a frame", async (_, idle) => {
+    const frame = zlib.zstdCompressSync("hello");
+    const decoder = zlib.createZstdDecompress();
+    const chunks = [];
+    decoder.on("data", chunk => chunks.push(chunk));
+    decoder.write(frame.subarray(0, -1));
+    for (let i = 0; i < 20; i++) idle(decoder);
+    decoder.end(frame.subarray(-1));
+    await stream.promises.finished(decoder);
+    expect(Buffer.concat(chunks).toString()).toBe("hello");
+  });
+
   // The cases of Node's test-zlib-reject-garbage-after-end.js that do not take that option.
   describe("what follows a frame", () => {
     const [a, b] = [zlib.zstdCompressSync("a"), zlib.zstdCompressSync("b")];

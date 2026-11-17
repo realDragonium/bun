@@ -102,8 +102,7 @@ impl HuffmanTable {
         self.finish(src, start, bits_below_mark(src, start)?, out)
     }
 
-    /// Fills `out[..len]` from the jump table and the four streams in `src[start..]`. It is quickest if `out` has
-    /// [`AMPLE_ROOM`].
+    /// Fills `out[..len]` from the jump table and the streams in `src[start..]`, quickest if `out` has [`AMPLE_ROOM`].
     pub(crate) fn decode_4_streams(
         &self,
         src: &[u8],

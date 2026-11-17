@@ -541,3 +541,23 @@ fn what_does_not_add_up_is_refused() {
     let fewer = [&repeated(0, 899).section, &block[4..]].concat();
     assert_eq!(decode(&fewer, 3608), Err(Error::CorruptionDetected));
 }
+
+#[test]
+fn a_stream_of_literals_has_as_many_as_it_says() {
+    let lengths = [4; 16];
+    // The table is for many of them, or for few.
+    for before in [40_000, 40] {
+        let mut frame = Frame::new(17, Vec::new());
+        frame.compressed(&huffman(&lengths, 4, vec![1; before]), &[]);
+        let stream = &huffman(&lengths, 1, vec![2; 600]).section[3 + 9..];
+        for count in [600, 596, 604, 1000] {
+            let literals = 3 | count << 4 | (stream.len() as u32) << 14;
+            let block = (3 + stream.len() as u32 + 1) << 3 | 2 << 1 | 1;
+            let [literals, block] = [literals, block].map(u32::to_le_bytes);
+            let bytes = [&frame.bytes, &block[..3], &literals[..3], stream, &[0]].concat();
+            let result = decompress(&bytes, &mut Output::slice(&mut vec![0; 50_000]), None);
+            let expected = (count != 600).then_some(Error::CorruptionDetected);
+            assert_eq!(result.err(), expected);
+        }
+    }
+}

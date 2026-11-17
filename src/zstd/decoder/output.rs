@@ -2,9 +2,10 @@
 
 use crate::error::{Error, Result};
 
-/// Above this, glibc up to 2.39 copies with `rep movsb`, which crawls on Zen 3 and 4 if the target is a few bytes ahead
-/// of the source modulo 4096: https://sourceware.org/bugzilla/show_bug.cgi?id=30994
+/// Longer copies can crawl on Zen 3 and 4: https://sourceware.org/bugzilla/show_bug.cgi?id=30994
 const PIECE_LEN: usize = 2048;
+/// They do if the target is a few bytes ahead of the source modulo this.
+const ALIAS_PERIOD: usize = 4096;
 /// No system has smaller ones.
 const PAGE_LEN: usize = 4096;
 
@@ -104,7 +105,7 @@ impl Target<'_> {
     #[inline(never)]
     fn write_many(&mut self, start: usize, bytes: &[u8]) {
         let address = self.bytes().as_ptr().addr().wrapping_add(start);
-        let lead = address.wrapping_sub(bytes.as_ptr().addr()) % 4096;
+        let lead = address.wrapping_sub(bytes.as_ptr().addr()) % ALIAS_PERIOD;
         if !(1..32).contains(&lead) {
             return self.write(start, bytes);
         }
@@ -285,8 +286,7 @@ impl<'a> Output<'a> {
         (self.target.bytes().get(start..self.position)).unwrap_or_default()
     }
 
-    /// Like [`lend`](Self::lend), with the last `kept` bytes that were written. It goes beyond the room if there is memory
-    /// for it, and up to `most` bytes if that comes for free.
+    /// The last `kept` bytes, and `len` more as far as there is memory, or up to `most` if that comes for free.
     #[inline]
     pub(crate) fn lend_with_slack(&mut self, kept: usize, len: usize, most: usize) -> &mut [u8] {
         let start = self.position - kept.min(self.written());

@@ -44,8 +44,6 @@ errors! {
     MemoryAllocation = 64, c"ZSTD_error_memory_allocation", c"Allocation error : not enough memory";
     DstSizeTooSmall = 70, c"ZSTD_error_dstSize_tooSmall", c"Destination buffer is too small";
     SrcSizeWrong = 72, c"ZSTD_error_srcSize_wrong", c"Src size is incorrect";
-    NoForwardProgressDestFull = 80, c"ZSTD_error_noForwardProgress_destFull", c"Operation made no progress over multiple calls, due to output buffer being full";
-    NoForwardProgressInputEmpty = 82, c"ZSTD_error_noForwardProgress_inputEmpty", c"Operation made no progress over multiple calls, due to input being empty";
 }
 
 impl core::fmt::Display for Error {
