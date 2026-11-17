@@ -1,7 +1,7 @@
 //! Decompression of input that comes in pieces, into output that is taken in pieces.
 
 use crate::block::BlockDecoder;
-use crate::decompress::{check_dictionary, decompress_frame};
+use crate::decompress::decompress_frame;
 use crate::destination::{Destination, OVERSHOOT};
 use crate::dictionary::Dictionary;
 use crate::error::{Error, Result};
@@ -9,7 +9,7 @@ use crate::format::{
     BLOCK_HEADER_LEN, BlockType, CHECKSUM_LEN, FRAME_HEADER_LEN_MAX, WINDOW_LOG_LIMIT_DEFAULT,
     WINDOW_LOG_MAX, WINDOW_LOG_MIN,
 };
-use crate::frame::{BlockHeader, FrameHeader, FrameLen, Header, measure_frame};
+use crate::frame::{BlockHeader, FrameHeader, FrameLen, Header};
 use crate::output::Output;
 use crate::xxhash::XxHash64;
 
@@ -95,6 +95,23 @@ fn take_up_to<'a>(input: &mut &'a [u8], len: usize) -> &'a [u8] {
     taken
 }
 
+/// Takes a header, or the rest of it, from `input`. If that is not enough, it is added to the `len` bytes in `gathered`.
+fn read_header(
+    gathered: &mut [u8; FRAME_HEADER_LEN_MAX],
+    len: &mut usize,
+    input: &mut &[u8],
+) -> Result<Header> {
+    let mut src = *input;
+    if *len != 0 || src.len() < FRAME_HEADER_LEN_MAX {
+        let room = gathered.iter_mut().skip(*len);
+        let added = room.zip(*input).map(|(to, from)| *to = *from).count();
+        src = gathered.get(..*len + added).ok_or(Error::Internal)?;
+    }
+    let header = Header::read(src)?;
+    *len += take_up_to(input, header.len() - *len).len();
+    Ok(header)
+}
+
 impl Decoder {
     pub fn new() -> Self {
         Self {
@@ -142,7 +159,6 @@ impl Decoder {
     /// Forgets the frame in progress and the error.
     pub fn reset_session(&mut self) {
         self.stage = Stage::Idle;
-        self.idle_steps = 0;
         self.error = None;
     }
 
@@ -183,7 +199,7 @@ impl Decoder {
         if size > out.reserved_room() as u64 && !(out.grows() && is_small && may_fit) {
             return None;
         }
-        let Ok((FrameLen::Complete(len), blocks)) = measure_frame(input) else {
+        let Ok((FrameLen::Complete(len), blocks)) = header.measure(input) else {
             return None;
         };
         let most = (blocks as u64).saturating_mul(header.block_len_max() as u64);
@@ -193,35 +209,42 @@ impl Decoder {
     fn try_step(&mut self, input: &[u8], out: &mut Output<'_>) -> Result<(usize, Status)> {
         let written = out.written();
         let mut rest = input;
-        if let Stage::Idle | Stage::Header { .. } = self.stage {
-            let had_nothing = matches!(self.stage, Stage::Idle | Stage::Header { len: 0, .. });
-            let Some(header) = self.gather_header(&mut rest)? else {
-                return Ok((input.len(), Status::Pending));
+        if let Stage::Idle = self.stage {
+            self.stage = Stage::Header {
+                bytes: [0; _],
+                len: 0,
             };
-            if let Header::Frame(header) = &header
-                && had_nothing
-                && let Some(len) = self.len_in_one_pass(header, input, out)
-            {
-                let frame = input.get(..len).ok_or(Error::Internal)?;
-                let (is_last, dictionary) = (len == input.len(), self.dictionary.as_ref());
-                decompress_frame(&mut self.blocks, header, frame, is_last, out, dictionary)?;
-                self.stage = Stage::Idle;
-                self.idle_steps = 0;
-                return Ok((len, Status::Complete));
-            }
-            self.stage = match header {
-                Header::Frame(header) => Stage::Body(self.start_frame(header)?),
-                Header::Skippable { content_len } => Stage::Skipped {
+        }
+        if let Stage::Header { bytes, len } = &mut self.stage {
+            let starts_here = *len == 0;
+            self.stage = match &read_header(bytes, len, &mut rest)? {
+                Header::Incomplete(_) => return Ok((input.len(), Status::Pending)),
+                &Header::Skippable { content_len } => Stage::Skipped {
                     left: content_len as usize,
                 },
-                Header::Incomplete(_) => return Err(Error::Internal),
+                Header::Frame(header) => {
+                    if starts_here && let Some(len) = self.len_in_one_pass(header, input, out) {
+                        let frame = input.get(..len).ok_or(Error::Internal)?;
+                        let (is_last, dictionary) = (len == input.len(), self.dictionary.as_ref());
+                        decompress_frame(
+                            &mut self.blocks,
+                            header,
+                            frame,
+                            is_last,
+                            out,
+                            dictionary,
+                        )?;
+                        self.stage = Stage::Idle;
+                        return Ok((len, Status::Complete));
+                    }
+                    Stage::Body(self.start_frame(header)?)
+                }
             };
         }
         if let Stage::Skipped { left } = &mut self.stage {
             *left -= take_up_to(&mut rest, *left).len();
-        } else {
-            self.decode_body(&mut rest, out)?;
         }
+        self.decode_body(&mut rest, out)?;
 
         let consumed = input.len() - rest.len();
         if consumed != 0 || out.written() != written {
@@ -258,37 +281,8 @@ impl Decoder {
         Ok((consumed + released, Status::Complete))
     }
 
-    /// `None` if `input` is used up before the header is complete.
-    fn gather_header(&mut self, input: &mut &[u8]) -> Result<Option<Header>> {
-        if let Stage::Idle = self.stage {
-            self.stage = Stage::Header {
-                bytes: [0; _],
-                len: 0,
-            };
-        }
-        let Stage::Header { bytes, len } = &mut self.stage else {
-            return Err(Error::Internal);
-        };
-        loop {
-            let header = Header::read(bytes.get(..*len).ok_or(Error::Internal)?)?;
-            let Header::Incomplete(needed) = header else {
-                return Ok(Some(header));
-            };
-            if input.is_empty() {
-                return Ok(None);
-            }
-            for to in bytes.get_mut(*len..needed).ok_or(Error::Internal)? {
-                let Some(&byte) = input.split_off_first() else {
-                    break;
-                };
-                *to = byte;
-                *len += 1;
-            }
-        }
-    }
-
-    fn start_frame(&mut self, header: FrameHeader) -> Result<Frame> {
-        check_dictionary(&header, self.dictionary.as_ref())?;
+    fn start_frame(&mut self, header: &FrameHeader) -> Result<Frame> {
+        header.check_dictionary(self.dictionary.as_ref())?;
         let window_size = header.window_size.max(1 << WINDOW_LOG_MIN);
         if window_size > self.window_size_max {
             return Err(Error::WindowTooLarge);
@@ -299,7 +293,7 @@ impl Decoder {
         self.gathered.clear();
         self.blocks.start_frame(self.dictionary.as_ref());
         Ok(Frame {
-            header,
+            header: *header,
             next: Part::BlockHeader,
             decoded_size: 0,
             hash: header.has_checksum.then(XxHash64::new),
@@ -308,10 +302,10 @@ impl Decoder {
     }
 
     fn decode_body(&mut self, input: &mut &[u8], out: &mut Output<'_>) -> Result<()> {
-        let Stage::Body(frame) = &mut self.stage else {
-            return Err(Error::Internal);
-        };
-        while self.ring.flush(out, &frame.header)? {
+        let all = *input;
+        while let Stage::Body(frame) = &mut self.stage
+            && self.ring.flush(out, &frame.header)?
+        {
             let needed = match frame.next {
                 Part::Nothing => return Ok(()),
                 Part::BlockHeader => BLOCK_HEADER_LEN,
@@ -323,8 +317,8 @@ impl Decoder {
             };
             let missing = needed - self.gathered.len();
             let piece = take_up_to(input, missing);
-            let part = if piece.len() == needed {
-                piece
+            let src = if piece.len() == needed {
+                all.get(..all.len() - input.len()).ok_or(Error::Internal)?
             } else if piece.is_empty() {
                 return Ok(());
             } else {
@@ -335,12 +329,8 @@ impl Decoder {
                 }
                 &self.gathered
             };
-            frame.decode(
-                part,
-                &mut self.blocks,
-                self.dictionary.as_ref(),
-                &mut self.ring,
-            )?;
+            let dictionary = self.dictionary.as_ref();
+            frame.decode(src, needed, &mut self.blocks, dictionary, &mut self.ring)?;
             self.gathered.clear();
         }
         Ok(())
@@ -348,14 +338,16 @@ impl Decoder {
 }
 
 impl Frame {
-    /// `part` is what `next` says.
+    /// The last `len` bytes of `src` are what `next` says.
     fn decode(
         &mut self,
-        part: &[u8],
+        src: &[u8],
+        len: usize,
         blocks: &mut BlockDecoder,
         dictionary: Option<&Dictionary<'_>>,
         ring: &mut Ring,
     ) -> Result<()> {
+        let part = src.get(src.len() - len..).ok_or(Error::Internal)?;
         let block_len_max = self.header.block_len_max();
         let (header, left) = match self.next {
             Part::BlockHeader => {
@@ -371,12 +363,12 @@ impl Frame {
                 (header, 0)
             }
             Part::BlockContent { header, left } => {
-                let decoded = ring.decode(&self.header, header, part, blocks, dictionary)?;
+                let decoded = ring.decode(&self.header, header, src, len, blocks, dictionary)?;
                 self.decoded_size += decoded.len() as u64;
                 if let Some(hash) = &mut self.hash {
                     hash.update(decoded);
                 }
-                (header, left - part.len())
+                (header, left - len)
             }
             Part::Checksum => {
                 let checksum = u32::from_le_bytes(*part.first_chunk().ok_or(Error::Internal)?);
@@ -440,12 +432,13 @@ impl Ring {
         Ok(true)
     }
 
-    /// Returns what `content` decoded to.
+    /// Returns what the last `len` bytes of `src` decoded to.
     fn decode(
         &mut self,
         frame: &FrameHeader,
         header: BlockHeader,
-        content: &[u8],
+        src: &[u8],
+        len: usize,
         blocks: &mut BlockDecoder,
         dictionary: Option<&Dictionary<'_>>,
     ) -> Result<&[u8]> {
@@ -468,13 +461,8 @@ impl Ring {
         };
         let room = self.capacity - position;
         let destination = Destination::new(&mut out, frame, position, external, room);
-        let len = match header.block_type() {
-            BlockType::Compressed => blocks.decode(content, dictionary, destination),
-            BlockType::Raw => destination.finish(0, content),
-            BlockType::Rle => destination.finish_repeated(content, header.size()),
-        }?;
+        self.end += blocks.decode(header, src, len, dictionary, destination)?;
         drop(out);
-        self.end += len;
         self.bytes.get(self.start..self.end).ok_or(Error::Internal)
     }
 }

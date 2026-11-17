@@ -41,7 +41,7 @@ impl ZstdError {
     }
 }
 
-/// The size in a frame header is only a claim.
+/// The content size in a header gets no more memory than this before anything is written.
 const MAX_PREALLOCATE_SIZE: usize = 16 * 1024 * 1024;
 
 fn with_capacity(capacity: usize) -> Result<Vec<u8>, ZstdError> {

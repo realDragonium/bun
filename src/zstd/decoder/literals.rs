@@ -3,7 +3,7 @@
 use crate::bits::load_from;
 use crate::error::{Error, Result};
 use crate::format::{Encoding, MIN_LITERALS_FOR_4_STREAMS};
-use crate::huffman::{AMPLE_ROOM, HuffmanTable};
+use crate::huffman::HuffmanTable;
 
 /// How many bytes behind the literals can be read too.
 pub(crate) const LITERALS_PADDING: usize = 32;
@@ -126,9 +126,12 @@ impl LiteralsHeader {
         Ok(())
     }
 
-    /// How much room to offer to [`Self::decode`], if it has to be cleared first.
-    pub(crate) fn room_worth_clearing(&self, table: &HuffmanTable) -> usize {
-        let is_large = self.has_4_streams && table.has_pairs() && self.count > AMPLE_ROOM / 2;
-        (self.count + LITERALS_PADDING).max(if is_large { AMPLE_ROOM } else { 0 })
+    /// How many literals [`Self::decode`] is quicker for if it has [`AMPLE_ROOM`](crate::huffman::AMPLE_ROOM).
+    pub(crate) fn count_for_ample_room(&self, table: &HuffmanTable) -> usize {
+        if self.has_4_streams && table.has_pairs() {
+            self.count
+        } else {
+            0
+        }
     }
 }

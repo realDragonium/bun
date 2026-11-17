@@ -9,11 +9,12 @@ pub(crate) const OVERSHOOT: usize = 32;
 /// Positions in it and in the block behind it fit in 32 bits.
 const ADJACENT_HISTORY_MAX: usize = (1 << 32) - (1 << 19);
 
-/// The size in a header is only a claim. It gets memory up to this much...
-const CREDIBLE_SIZE: u64 = 16 << 20;
-/// ...or this many times what has turned out to be there.
-const CREDIBLE_FACTOR: u64 = 8;
-const STAND_IN_LEN: usize = 1024;
+/// The content size in a header gets no more memory at once than this...
+const RESERVED_AT_ONCE_MAX: u64 = 16 << 20;
+/// ...or this many times what is written.
+const RESERVED_AT_ONCE_FACTOR: u64 = 8;
+/// Without the overshoot. The smaller takes less time to clear.
+const STAND_IN_LENS: [usize; 2] = [224, 1024];
 /// More output than this is not moved to make room for the overshoot, and does not double if its end is in sight.
 const CHEAP_TO_MOVE: usize = 1 << 20;
 
@@ -24,7 +25,7 @@ pub(crate) struct Destination<'o, 'a> {
     history_len: usize,
     /// The end of the history before those.
     external: &'o [u8],
-    /// That in `out`, and in what `external` keeps from being there.
+    /// That of the output or the ring, which `out` may be a part of or stand in for.
     room: usize,
     /// How long the block can get.
     limit: usize,
@@ -94,14 +95,20 @@ impl<'o, 'a> Destination<'o, 'a> {
     }
 
     /// For `len` bytes from the start of the block on. If that takes more memory, for `wanted`, or the rest of the frame.
-    #[inline]
+    #[inline(always)]
     fn reserve(&mut self, len: usize, wanted: usize) -> Result<()> {
-        if !self.out.grows() || len <= self.out.reserved_room() {
-            return Ok(());
+        if self.out.grows() && len > self.out.reserved_room() {
+            self.reserve_more(len, wanted)?;
         }
+        Ok(())
+    }
+
+    #[cold]
+    fn reserve_more(&mut self, len: usize, wanted: usize) -> Result<()> {
         let written = self.history_len as u64;
-        let credible = CREDIBLE_SIZE.max(written.saturating_mul(CREDIBLE_FACTOR));
-        let size = self.frame.content_size.filter(|&size| size <= credible);
+        let most = written.saturating_mul(RESERVED_AT_ONCE_FACTOR);
+        let most = most.max(RESERVED_AT_ONCE_MAX);
+        let size = self.frame.content_size.filter(|&size| size <= most);
         let len_to_move = self.out.len_to_move();
         match size.map(|size| size.saturating_sub(written) as usize + OVERSHOOT) {
             Some(left) if left < len => self.out.reserve(len),
@@ -117,7 +124,7 @@ impl<'o, 'a> Destination<'o, 'a> {
     /// Writes a sequence that fits behind the first `len` bytes of the block, and nothing behind it.
     pub(crate) fn write(
         &mut self,
-        mut len: usize,
+        len: usize,
         literals: &[u8],
         offset: usize,
         match_len: usize,
@@ -128,17 +135,17 @@ impl<'o, 'a> Destination<'o, 'a> {
         }
         self.reserve(end, end)?;
         self.out.write_ahead(len, literals);
-        len += literals.len();
-        if let Some(distance @ 1..) = offset.checked_sub(self.history_len + len) {
+        let mut ahead = len + literals.len();
+        if let Some(distance @ 1..) = offset.checked_sub(self.history_len + ahead) {
             let from = self.external.len().checked_sub(distance);
             let from = from.and_then(|from| self.external.get(from..));
             let from = from.ok_or(Error::CorruptionDetected)?;
             let from = from.get(..match_len).unwrap_or(from);
-            self.out.write_ahead(len, from);
-            len += from.len();
+            self.out.write_ahead(ahead, from);
+            ahead += from.len();
         }
-        if len < end {
-            self.out.repeat_ahead(len, offset, end - len)?;
+        if ahead < end {
+            self.out.repeat_ahead(ahead, offset, end - ahead)?;
         }
         Ok(())
     }
@@ -150,14 +157,21 @@ impl<'o, 'a> Destination<'o, 'a> {
         &mut self,
         write: impl FnOnce(&mut Destination<'_, '_>) -> Result<(usize, T)>,
     ) -> Result<(usize, T)> {
-        let is_short = self.history_len == 0 && self.limit <= STAND_IN_LEN && !self.grows();
+        let is_short = self.history_len == 0 && self.limit <= STAND_IN_LENS[1] && !self.grows();
         let is_tight =
             |size| self.limit + OVERSHOOT > self.out.room_with_slack() && size <= self.limit as u64;
         if !(is_short && self.frame.content_size.is_some_and(is_tight)) {
             return write(self);
         }
-        let mut bytes = [0; STAND_IN_LEN + OVERSHOOT];
-        let mut out = Output::slice(&mut bytes);
+        let (mut few_bytes, mut many_bytes);
+        let bytes: &mut [u8] = if self.limit <= STAND_IN_LENS[0] {
+            few_bytes = [0; STAND_IN_LENS[0] + OVERSHOOT];
+            &mut few_bytes
+        } else {
+            many_bytes = [0; STAND_IN_LENS[1] + OVERSHOOT];
+            &mut many_bytes
+        };
+        let mut out = Output::slice(bytes);
         let (len, rest) = write(&mut Destination::new(
             &mut out,
             self.frame,
@@ -197,18 +211,11 @@ impl<'o, 'a> Destination<'o, 'a> {
         let is_cheap_to_move = self.out.len_to_move() <= CHEAP_TO_MOVE;
         let overshoot = if is_cheap_to_move { OVERSHOOT } else { 0 };
         self.reserve(len.min(self.limit) + overshoot, wanted)?;
-        let detached_len = self.history_len - self.position();
-        let lent = (self.out).lend_with_slack(self.history_len, wanted, self.limit + OVERSHOOT);
-        let (detached, out) = lent
-            .split_at_mut_checked(detached_len)
-            .ok_or(Error::Internal)?;
-        Ok(Loan {
-            detached: if detached.is_empty() {
-                self.external
-            } else {
-                detached
-            },
-            out,
-        })
+        let (mut detached, detached_len) = (self.external, self.history_len - self.position());
+        let mut out = (self.out).lend_with_slack(self.history_len, wanted, self.limit + OVERSHOOT);
+        if detached_len != 0 {
+            detached = out.split_off_mut(..detached_len).ok_or(Error::Internal)?;
+        }
+        Ok(Loan { detached, out })
     }
 }

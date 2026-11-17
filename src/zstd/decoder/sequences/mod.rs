@@ -166,21 +166,24 @@ impl Queue<'_> {
         Ok(self.next()?.position.wrapping_add(lens.sum()))
     }
 
-    /// Returns `sequence` if it does not fit in a slot.
-    fn push(&mut self, sequence: Sequence) -> Result<Option<Sequence>> {
+    /// Puts the next sequence in a slot, or in `large` if it does not fit.
+    #[inline(always)]
+    fn read(&mut self, reader: &mut Reader<'_>, large: &mut Option<Sequence>) -> Result<()> {
+        let sequence = reader.next();
         let lens = (
             sequence.literal_len.try_into(),
             sequence.match_len.try_into(),
         );
         let ((Ok(literal_len), Ok(match_len)), -2..) = (lens, sequence.offset as i32) else {
-            return Ok(Some(sequence));
+            *large = Some(sequence);
+            return Ok(());
         };
         self.rewind_if_through()?;
         let slot = self.slots.get_mut(self.start + REPEATS + self.pending);
         let slot = slot.ok_or(Error::Internal)?;
         (slot.offset, slot.literal_len, slot.match_len) = (sequence.offset, literal_len, match_len);
         self.pending += 1;
-        Ok(None)
+        Ok(())
     }
 
     /// Returns whether it got to where `kept` are left before one needed care.
@@ -295,12 +298,13 @@ impl Queue<'_> {
         let mut large = None;
         loop {
             reader.move_to_padded_start();
-            while large.is_none()
-                && reader.left != 0
-                && (self.pending < AHEAD || (self.pending < PENDING_MAX && !reader.is_quick()))
-            {
-                large = self.push(reader.next())?;
-            }
+            let is_quick = loop {
+                let is_quick = self.pending >= AHEAD && large.is_none() && reader.is_quick();
+                if is_quick || large.is_some() || reader.left == 0 || self.pending == PENDING_MAX {
+                    break is_quick;
+                }
+                self.read(reader, &mut large)?;
+            };
             if self.pending == 0 {
                 let Some(large) = large.take() else {
                     return Ok(());
@@ -326,17 +330,16 @@ impl Queue<'_> {
                 continue;
             }
 
-            let goes_on = large.is_none() && reader.left != 0;
-            let kept = if goes_on { AHEAD } else { 0 };
+            let kept = if is_quick { AHEAD } else { 0 };
             if self.pending > kept && !self.run_pending_quickly(kept, literals, detached, out) {
                 self.run_pending_carefully(literals, destination)?;
-            } else if goes_on && reader.is_quick() {
+            } else if is_quick {
                 with_bmi2(
                     #[inline(always)]
                     || read_and_run::<AHEAD>(reader, self, literals, detached, out),
                 )?;
                 if reader.left == 1 {
-                    large = self.push(reader.next())?;
+                    self.read(reader, &mut large)?;
                     self.run_pending_quickly(0, literals, detached, out);
                 }
             }
@@ -344,17 +347,17 @@ impl Queue<'_> {
     }
 }
 
-/// Runs the `count` sequences in `block[start..]`. Returns how many bytes they wrote, and how many literals they took.
+/// Runs the `count` sequences in `src[start..]`. Returns how many bytes they wrote, and how many literals they took.
 pub(crate) fn run_sequences(
     tables: [&SequenceTables; 3],
-    block: &[u8],
+    src: &[u8],
     start: usize,
     count: usize,
     literals: &[u8],
     repeat_offsets: &mut [u32; REPEATS],
     destination: &mut Destination<'_, '_>,
 ) -> Result<(usize, usize)> {
-    let bits = BackwardBits::new(block, start)?;
+    let bits = BackwardBits::new(src, start)?;
     let mut padded_start = [0; _];
     if !bits.is_padded() {
         bits.pad_start(&mut padded_start);
@@ -378,14 +381,17 @@ pub(crate) fn run_sequences(
         pending: 0,
     };
 
-    if count > BATCH && destination.reach() > CACHED_LEN && tables[1].has_many_far_offsets() {
-        queue.run_all::<AHEAD_MAX>(&mut reader, literals, destination)?;
-    } else {
-        queue.run_all::<1>(&mut reader, literals, destination)?;
-    }
-    if reader.bits.left() != 0 {
+    let result =
+        if count > BATCH && destination.reach() > CACHED_LEN && tables[1].has_many_far_offsets() {
+            queue.run_all::<AHEAD_MAX>(&mut reader, literals, destination)
+        } else {
+            queue.run_all::<1>(&mut reader, literals, destination)
+        };
+    // How a sequence fails that is not all in the stream depends on what is in front of it.
+    if reader.bits.left() < 0 || (result.is_ok() && reader.bits.left() != 0) {
         return Err(Error::CorruptionDetected);
     }
+    result?;
     let slots = queue
         .slots
         .get(queue.start..)

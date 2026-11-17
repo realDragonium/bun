@@ -50,7 +50,7 @@ pub(crate) fn bits_below_mark(src: &[u8], start: usize) -> Result<usize> {
     }
 }
 
-/// Reads a stream from its last bit to its first. What it reads beyond the first is garbage.
+/// Reads a stream from its last bit to its first. What it reads beyond the first means nothing.
 #[derive(Clone, Copy)]
 pub(crate) struct BackwardBits<'a> {
     pub(crate) src: &'a [u8],
@@ -63,12 +63,15 @@ pub(crate) struct BackwardBits<'a> {
     pub(crate) start: usize,
 }
 
-/// The first bytes of a source, behind 8 more.
-pub(crate) type PaddedStart = [u8; 40];
+/// The first bytes of a source, behind [`BackwardBits::PADDING`].
+pub(crate) type PaddedStart = [u8; BackwardBits::PADDING + 32];
 
 impl<'a> BackwardBits<'a> {
     /// What [`Self::refill`] makes available, if there are as many.
     pub(crate) const IN_REFILL: u32 = 56;
+
+    /// With as many bytes in front of it, a stream is over before a refill goes below the start of `src`.
+    pub(crate) const PADDING: usize = 8;
 
     /// For the stream in `src[start..]`.
     #[inline(always)]
@@ -97,23 +100,22 @@ impl<'a> BackwardBits<'a> {
         self.container = load_from(self.src, self.position);
     }
 
-    /// Whether the stream is over before a refill by all the bytes that are used up goes below the start of `src`.
     #[inline(always)]
     pub(crate) fn is_padded(&self) -> bool {
-        self.start >= 8
+        self.start >= Self::PADDING
     }
 
     pub(crate) fn pad_start(&self, padded: &mut PaddedStart) {
-        (padded.iter_mut().skip(8).zip(self.src)).for_each(|(to, from)| *to = *from);
+        (padded.iter_mut().skip(Self::PADDING).zip(self.src)).for_each(|(to, from)| *to = *from);
     }
 
     /// Goes on in what [`Self::pad_start`] filled, once that has all that is left.
     #[inline(always)]
     pub(crate) fn move_to(&mut self, padded: &'a PaddedStart) {
-        if !self.is_padded() && self.position + 16 <= padded.len() {
+        if !self.is_padded() && Self::PADDING + self.position + 8 <= padded.len() {
             self.src = padded;
-            self.position += 8;
-            self.start += 8;
+            self.position += Self::PADDING;
+            self.start += Self::PADDING;
             self.refill();
         }
     }

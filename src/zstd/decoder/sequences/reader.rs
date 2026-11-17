@@ -98,11 +98,14 @@ impl<'a> Reader<'a> {
 
     pub(super) fn next(&mut self) -> Sequence {
         let (literal_row, offset_row, match_row) = self.states.rows(self.tables);
-        let mut bits = self.bits;
+        let bits = &mut self.bits;
+        let needs_refill = bits.available < self.states.total_bits(self.tables);
         let offset =
             (offset_row.base as u32).wrapping_add(bits.read(offset_row.extra_bits as u32) as u32);
         let match_len = match_row.full_base() + bits.read(match_row.extra_bits as u32) as u32;
-        bits.refill();
+        if needs_refill {
+            bits.refill();
+        }
         let literal_len = literal_row.full_base() + bits.read(literal_row.extra_bits as u32) as u32;
         self.left -= 1;
         if self.left != 0 {
@@ -114,7 +117,6 @@ impl<'a> Reader<'a> {
             };
             bits.refill();
         }
-        self.bits = bits;
         Sequence {
             literal_len,
             match_len,

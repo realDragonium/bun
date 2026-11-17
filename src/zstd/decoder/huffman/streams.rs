@@ -35,6 +35,25 @@ impl Stream {
         Some(u64::from_le_bytes(*bytes) << (position.wrapping_neg() % 8))
     }
 
+    /// Fills `out`, however close to the start of `src`. `look_up` returns the next symbol and the length of its code.
+    #[inline(always)]
+    pub(super) fn decode_carefully(
+        &mut self,
+        src: &[u8],
+        out: &mut [u8],
+        look_up: impl Fn(u64) -> Option<(u8, u8)>,
+    ) -> Result<()> {
+        for round in out.chunks_mut(LOOKUPS) {
+            *self = Self::new(src, self.position);
+            for to in round {
+                let (symbol, length) = look_up(self.bits).ok_or(Error::Internal)?;
+                *to = symbol;
+                self.skip(length);
+            }
+        }
+        Ok(())
+    }
+
     #[inline(always)]
     pub(super) fn skip(&mut self, length: u8) {
         self.bits = self.bits.wrapping_shl(length.into());

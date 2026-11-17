@@ -24,9 +24,8 @@ impl StreamingDecoder {
         matches!(self.state, State::Inflating)
     }
 
-    /// Append decompressed bytes to `out` until `input` is
-    /// consumed or `out.len()` reaches `max_output`. Returns the input bytes consumed.
-    /// Returns `ShortRead` when more input is required and `is_done` is false.
+    /// Appends to `out` until `input` is consumed or `out.len()` reaches `max_output`. Returns how much it consumed, or
+    /// `ShortRead` if a frame needs more input and `is_done` is false.
     pub fn decompress(
         &mut self,
         input: &[u8],
@@ -70,12 +69,6 @@ impl StreamingDecoder {
             if status == Status::Complete {
                 self.state = State::Uninitialized;
                 self.output_full = false;
-                if total_in >= input.len() {
-                    if is_done {
-                        self.state = State::End;
-                    }
-                    return Ok(total_in);
-                }
                 continue;
             }
 

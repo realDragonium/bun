@@ -193,24 +193,21 @@ impl SequenceTables {
     pub(crate) fn read(&mut self, kind: CodeKind, src: &[u8]) -> Result<usize> {
         with_bmi2(
             #[inline(always)]
-            || self.read_inline(kind, src),
+            || {
+                let mut counts = [0; CODES_MAX];
+                let allowed = counts.get_mut(..=kind.max_code());
+                let description = read_counts(src, allowed.ok_or(Error::Internal)?)?;
+                if description.table_log > kind.table_log_max() {
+                    return Err(Error::CorruptionDetected);
+                }
+                let distribution = Distribution {
+                    counts: (counts.get(..=description.max_symbol)).ok_or(Error::Internal)?,
+                    table_log: description.table_log,
+                };
+                self.fill(kind, &distribution);
+                Ok(description.len)
+            },
         )
-    }
-
-    #[inline(always)]
-    fn read_inline(&mut self, kind: CodeKind, src: &[u8]) -> Result<usize> {
-        let mut counts = [0; CODES_MAX];
-        let allowed = counts.get_mut(..=kind.max_code());
-        let description = read_counts(src, allowed.ok_or(Error::Internal)?)?;
-        if description.table_log > kind.table_log_max() {
-            return Err(Error::CorruptionDetected);
-        }
-        let distribution = Distribution {
-            counts: (counts.get(..=description.max_symbol)).ok_or(Error::Internal)?,
-            table_log: description.table_log,
-        };
-        self.fill(kind, &distribution);
-        Ok(description.len)
     }
 
     /// For sequences that all have `code`.

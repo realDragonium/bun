@@ -16,7 +16,7 @@ use pairs::PairTable;
 use ranks::Ranks;
 use rows::{FILL, fill_rows, repeat_each};
 use singles::SingleTable;
-use streams::{LOOKUPS, Lane, Stream, Windows};
+use streams::{Lane, Stream, Windows};
 
 pub(crate) use pairs::AMPLE_ROOM;
 pub use weights::{HuffmanWeights, read_huffman_weights};
@@ -28,7 +28,7 @@ const QUICK_LEN: usize = 1 << QUICK_LOG;
 #[derive(Default)]
 pub(crate) struct HuffmanTable {
     log: u32,
-    /// By the next `log` bits: the length of the code in the first half, and its symbol in the second.
+    /// By the next `log` bits: the length of the code in the first half, and its symbol in the second. Unless `has_pairs`.
     singles: Vec<u8>,
     pairs: Option<Box<PairTable>>,
     has_pairs: bool,
@@ -55,10 +55,15 @@ impl HuffmanTable {
     #[inline(always)]
     fn fill(&mut self, tree: &HuffmanWeights, literals: usize) -> Result<()> {
         self.log = tree.table_log;
-        let half_len = self.half_len();
-        grow(&mut self.singles, 0, 2 * half_len + FILL)?;
         let mut ranks = Ranks::EMPTY;
         ranks.sort(tree);
+        self.has_pairs = self.log <= QUICK_LOG && ranks.are_pairs_quicker(literals);
+        if self.has_pairs {
+            return get_or_allocate(&mut self.pairs, || PairTable::EMPTY)?.fill(tree, &ranks);
+        }
+
+        let half_len = self.half_len();
+        grow(&mut self.singles, 0, 2 * half_len + FILL)?;
         let mut row = 0;
         for (length, symbols) in ranks.up_to(self.log) {
             let rows = symbols.len() << (self.log - length);
@@ -70,11 +75,6 @@ impl HuffmanTable {
             let rows = 1 << (self.log - length);
             repeat_each::<_, FILL>(&mut self.singles, row, symbols, rows, |symbol| symbol)?;
             row += symbols.len() * rows;
-        }
-
-        self.has_pairs = self.log <= QUICK_LOG && ranks.are_pairs_quicker(literals);
-        if self.has_pairs {
-            get_or_allocate(&mut self.pairs, || PairTable::EMPTY)?.fill(&ranks)?;
         }
         Ok(())
     }
@@ -160,19 +160,17 @@ impl HuffmanTable {
                 let mut stream = Stream::new(src, position);
                 if let Some(pairs) = self.pairs() {
                     out = pairs.decode(src, &mut stream, out);
-                }
-                if let Some(singles) = self.quick_singles() {
-                    out = singles.decode(src, &mut stream, out);
-                }
-                let halves = self.singles.split_at_checked(self.half_len());
-                let (lengths, symbols) = halves.ok_or(Error::Internal)?;
-                for round in out.chunks_mut(LOOKUPS) {
-                    stream = Stream::new(src, stream.position);
-                    for symbol in round {
-                        let row = stream.bits.wrapping_shr(64 - self.log) as usize;
-                        *symbol = *symbols.get(row).ok_or(Error::Internal)?;
-                        stream.skip(*lengths.get(row).ok_or(Error::Internal)?);
+                    stream.decode_carefully(src, out, |bits| Some(pairs.first(bits)))?;
+                } else {
+                    if let Some(singles) = self.quick_singles() {
+                        out = singles.decode(src, &mut stream, out);
                     }
+                    let halves = self.singles.split_at_checked(self.half_len());
+                    let (lengths, symbols) = halves.ok_or(Error::Internal)?;
+                    stream.decode_carefully(src, out, |bits| {
+                        let row = bits.wrapping_shr(64 - self.log) as usize;
+                        Some((*symbols.get(row)?, *lengths.get(row)?))
+                    })?;
                 }
                 if stream.position != 8 * start {
                     return Err(Error::CorruptionDetected);

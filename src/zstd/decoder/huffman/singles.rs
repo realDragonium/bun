@@ -1,9 +1,9 @@
 //! One symbol at a time.
 
-use super::streams::{LOOKUPS, Lane, ROUNDS_MAX, Stream, Windows, interleave, unload};
-use super::{QUICK_LEN, QUICK_LOG};
 use bun_highway::with_bmi2;
 
+use super::streams::{LOOKUPS, Lane, ROUNDS_MAX, Stream, Windows, interleave, unload};
+use super::{QUICK_LEN, QUICK_LOG};
 use crate::array::At;
 use crate::error::Result;
 

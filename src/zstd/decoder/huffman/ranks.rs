@@ -83,11 +83,11 @@ impl Ranks {
         QUICK_LEN - *self.rows_up_to.at(length as usize) as usize
     }
 
-    /// Whether looking up two codes at a time saves more than filling the table for it takes.
+    /// Whether looking up two codes at a time saves more time than it takes to fill the larger table.
     #[inline(always)]
     pub(super) fn are_pairs_quicker(&self, literals: usize) -> bool {
         // About in units of the time that a literal takes on its own.
-        const FILL_TIME: usize = 2000;
+        const FILL_TIME: usize = 800;
         const LOOKUP_TIME_IN_EIGHTHS: usize = 11;
 
         if literals <= FILL_TIME * 16 / (16 - LOOKUP_TIME_IN_EIGHTHS) {

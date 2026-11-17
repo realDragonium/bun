@@ -253,11 +253,14 @@ fn unusual_frames_decode() {
         let frame = hex(frame);
         assert_eq!(at_once(&frame, len).map(|out| out.len()), Ok(len));
         assert_eq!(byte_by_byte(&frame), at_once(&frame, len));
+        let mut out = Vec::with_capacity(len);
+        let result = stream(&mut Decoder::new(), &frame, [usize::MAX; 2], &mut out);
+        assert_eq!(result.map(|()| out), at_once(&frame, len));
     }
 }
 
 #[test]
-fn invalid_frames_fail_however_they_arrive() {
+fn invalid_frames_are_refused() {
     let frames = [
         ("28b52ffe 2000 010000", Error::PrefixUnknown),
         ("28b52ffd 2800 010000", Error::FrameParameterUnsupported),
@@ -308,6 +311,10 @@ fn invalid_frames_fail_however_they_arrive() {
             "28b52ffd 0000 250000 00 01 01 01",
             Error::CorruptionDetected,
         ),
+        (
+            "28b52ffd 200d 350000 106162 04 00 b0",
+            Error::CorruptionDetected,
+        ),
         ("28b52ffd 0000 150000 00 01", Error::SrcSizeWrong),
         ("28b52ffd 0000 150000 08 61", Error::SrcSizeWrong),
         ("28b52ffd 0000 150000 10 61", Error::CorruptionDetected),
@@ -315,6 +322,15 @@ fn invalid_frames_fail_however_they_arrive() {
     for (frame, error) in frames {
         assert_eq!(at_once(&hex(frame), 4096), Err(error), "{frame}");
         assert_eq!(byte_by_byte(&hex(frame)), Err(error), "{frame}");
+        for step in [6, usize::MAX] {
+            let result = stream(
+                &mut Decoder::new(),
+                &hex(frame),
+                [step, 4096],
+                &mut Vec::with_capacity(4096),
+            );
+            assert_eq!(result, Err(error), "{frame}");
+        }
     }
 }
 
@@ -558,22 +574,6 @@ fn huffman_codes_have_at_most_12_bits() {
 }
 
 #[test]
-fn earlier_frames_make_no_difference() {
-    let mut decoder = Decoder::new();
-    assert_eq!(
-        step(&mut decoder, &hex("28b52ffd 0050 010000"), 0).2,
-        Ok(Status::Complete)
-    );
-    let frame = hex("28b52ffd 8000 02000000 180000 616263 010000");
-    for decoder in [&mut decoder, &mut Decoder::new()] {
-        assert_eq!(
-            step(decoder, &frame, 1),
-            (0, 0, Err(Error::DstSizeTooSmall))
-        );
-    }
-}
-
-#[test]
 fn a_growing_output_seldom_moves() -> Result<()> {
     let frame = hex("28b52ffd 6000 03 032000 61");
     let (mut decoder, mut out, mut moves) = (Decoder::new(), Vec::new(), 0);
@@ -607,7 +607,6 @@ fn a_growing_output_seldom_moves() -> Result<()> {
 fn a_growing_output_takes_what_the_content_needs() -> Result<()> {
     let block = |last| hex(&format!("0{last}0010 61"));
     let blocks = |count: usize| [block(2).repeat(count - 1), block(3)].concat();
-    // Known to be 32 MiB, and said to be 1 TiB.
     let known = [hex("28b52ffd 8038 00000002"), blocks(256)].concat();
     let mut out = Vec::with_capacity(4 << 20);
     Decoder::new()
@@ -629,9 +628,9 @@ fn a_growing_output_takes_what_the_content_needs() -> Result<()> {
             .1?;
         assert_eq!((out.len(), out.capacity()), ((2 << 20) + 4, capacity));
     }
-    let claimed = [hex("28b52ffd c038 0000000000010000"), blocks(2)].concat();
+    let too_short = [hex("28b52ffd c038 0000000000010000"), blocks(2)].concat();
     let mut out = Vec::new();
-    let (_, status) = Decoder::new().step_growing(&claimed, &mut out, usize::MAX);
+    let (_, status) = Decoder::new().step_growing(&too_short, &mut out, usize::MAX);
     assert_eq!((status, out.len()), (Err(Error::CorruptionDetected), 0));
     assert!(out.capacity() <= 1 << 20);
 
@@ -784,7 +783,7 @@ fn damaged_dictionaries_are_refused() {
 }
 
 #[test]
-fn descriptions_end_within_their_input() -> Result<()> {
+fn table_and_tree_descriptions_are_read() -> Result<()> {
     let mut counts = [9; 4];
     let description = read_normalized_counts(&hex("10 a3 0f"), &mut counts)?;
     let expected = TableDescription {

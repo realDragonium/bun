@@ -1,6 +1,7 @@
 //! Frame and block headers.
 
 use crate::bits::load_from;
+use crate::dictionary::Dictionary;
 use crate::error::{Error, Result};
 use crate::format::{
     BLOCK_HEADER_LEN, BLOCK_LEN_MAX, BlockType, CHECKSUM_LEN, FRAME_MAGIC, SKIPPABLE_MAGIC,
@@ -21,7 +22,7 @@ pub(crate) struct FrameHeader {
     pub(crate) content_size: Option<u64>,
     pub(crate) window_size: u64,
     /// 0 if there is none.
-    pub(crate) dictionary_id: u32,
+    dictionary_id: u32,
     pub(crate) has_checksum: bool,
 }
 
@@ -69,6 +70,13 @@ pub fn may_start_frame(bytes: &[u8]) -> bool {
 }
 
 impl Header {
+    pub(crate) fn len(&self) -> usize {
+        match *self {
+            Self::Frame(FrameHeader { len, .. }) | Self::Incomplete(len) => len,
+            Self::Skippable { .. } => SKIPPABLE_HEADER_LEN,
+        }
+    }
+
     pub(crate) fn read(src: &[u8]) -> Result<Self> {
         let Some((&[m0, m1, m2, m3, descriptor], fields)) = src.split_first_chunk() else {
             if !src.is_empty() && !may_start_frame(src) {
@@ -125,6 +133,30 @@ impl Header {
 }
 
 impl FrameHeader {
+    pub(crate) fn check_dictionary(&self, dictionary: Option<&Dictionary<'_>>) -> Result<()> {
+        if self.dictionary_id != 0 && self.dictionary_id != dictionary.map_or(0, Dictionary::id) {
+            return Err(Error::DictionaryWrong);
+        }
+        Ok(())
+    }
+
+    /// The length of the frame that `prefix` starts with, and how many blocks there are as far as it goes.
+    pub(crate) fn measure(&self, prefix: &[u8]) -> Result<(FrameLen, usize)> {
+        let (mut len, mut blocks) = (self.len, 0);
+        loop {
+            let Some(block) = prefix.get(len..).and_then(<[u8]>::first_chunk) else {
+                return Ok((FrameLen::AtLeast(len + BLOCK_HEADER_LEN), blocks));
+            };
+            let block = BlockHeader::new(*block)?;
+            len += BLOCK_HEADER_LEN + block.content_len();
+            blocks += 1;
+            if block.is_last() {
+                len += if self.has_checksum { CHECKSUM_LEN } else { 0 };
+                return Ok((FrameLen::new(len, prefix), blocks));
+            }
+        }
+    }
+
     /// `size` is that of the blocks so far.
     pub(crate) fn check_content_size(&self, size: u64, is_complete: bool) -> Result<()> {
         match self.content_size {
@@ -186,6 +218,16 @@ pub enum FrameLen {
     AtLeast(usize),
 }
 
+impl FrameLen {
+    fn new(len: usize, prefix: &[u8]) -> Self {
+        if len <= prefix.len() {
+            Self::Complete(len)
+        } else {
+            Self::AtLeast(len)
+        }
+    }
+}
+
 /// With the header.
 pub(crate) fn skippable_len(content_len: u32) -> Result<usize> {
     let len = content_len.checked_add(SKIPPABLE_HEADER_LEN as u32);
@@ -195,40 +237,16 @@ pub(crate) fn skippable_len(content_len: u32) -> Result<usize> {
 
 /// The length of the frame that `prefix` starts with.
 pub fn frame_len(prefix: &[u8]) -> Result<FrameLen> {
-    measure_frame(prefix).map(|(len, _)| len)
-}
-
-/// Also returns how many blocks it found.
-pub(crate) fn measure_frame(prefix: &[u8]) -> Result<(FrameLen, usize)> {
-    let mut blocks = 0;
-    let len = match Header::read(prefix)? {
-        Header::Incomplete(len) => len,
-        Header::Skippable { content_len } => skippable_len(content_len)?,
-        Header::Frame(header) => {
-            let mut len = header.len;
-            loop {
-                let Some(block) = prefix.get(len..).and_then(<[u8]>::first_chunk) else {
-                    return Ok((FrameLen::AtLeast(len + BLOCK_HEADER_LEN), blocks));
-                };
-                let block = BlockHeader::new(*block)?;
-                len += BLOCK_HEADER_LEN + block.content_len();
-                blocks += 1;
-                if block.is_last() {
-                    break len + if header.has_checksum { CHECKSUM_LEN } else { 0 };
-                }
-            }
-        }
-    };
-    if len <= prefix.len() {
-        Ok((FrameLen::Complete(len), blocks))
-    } else {
-        Ok((FrameLen::AtLeast(len), blocks))
-    }
+    Ok(match Header::read(prefix)? {
+        Header::Frame(header) => header.measure(prefix)?.0,
+        Header::Skippable { content_len } => FrameLen::new(skippable_len(content_len)?, prefix),
+        Header::Incomplete(len) => FrameLen::AtLeast(len),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentSize {
-    /// What the input claims.
+    /// As headers have it.
     Known(u64),
     Unknown,
     Invalid,

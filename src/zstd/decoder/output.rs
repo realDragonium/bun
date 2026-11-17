@@ -100,6 +100,18 @@ impl Target<'_> {
             to.copy_from_slice(bytes);
         }
     }
+
+    #[inline(never)]
+    fn write_many(&mut self, start: usize, bytes: &[u8]) {
+        let address = self.bytes().as_ptr().addr().wrapping_add(start);
+        let lead = address.wrapping_sub(bytes.as_ptr().addr()) % 4096;
+        if !(1..32).contains(&lead) {
+            return self.write(start, bytes);
+        }
+        for (index, piece) in bytes.chunks(PIECE_LEN).enumerate() {
+            self.write(start + index * PIECE_LEN, piece);
+        }
+    }
 }
 
 impl<'a> Output<'a> {
@@ -223,12 +235,8 @@ impl<'a> Output<'a> {
     #[inline]
     pub(crate) fn write_ahead(&mut self, ahead: usize, bytes: &[u8]) {
         let start = self.position + ahead;
-        let address = self.target.bytes().as_ptr().addr().wrapping_add(start);
-        let lead = address.wrapping_sub(bytes.as_ptr().addr()) % 4096;
-        if bytes.len() > PIECE_LEN && (1..32).contains(&lead) {
-            for (index, piece) in bytes.chunks(PIECE_LEN).enumerate() {
-                self.target.write(start + index * PIECE_LEN, piece);
-            }
+        if bytes.len() > PIECE_LEN {
+            self.target.write_many(start, bytes);
         } else if !bytes.is_empty() {
             self.target.write(start, bytes);
         }

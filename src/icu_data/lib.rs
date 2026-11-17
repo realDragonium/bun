@@ -38,7 +38,7 @@ unsafe fn frame<'a>(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn Bun__ICUItem__size(item: *const u8, length: i32) -> i32 {
     let has_header = |prefix: &[u8]| frame_content_size(prefix) != ContentSize::Invalid;
-    // SAFETY: passed on.
+    // SAFETY: the caller guarantees what `frame()` asks for.
     match unsafe { frame(item, length, has_header) }.map(frame_content_size) {
         Some(ContentSize::Known(size)) => i32::try_from(size).unwrap_or(-1),
         _ => -1,
@@ -56,15 +56,16 @@ unsafe extern "C" fn Bun__ICUItem__decompress(
     out: *mut u8,
     size: usize,
 ) -> bool {
-    static DICTIONARY: OnceLock<Option<Dictionary<'static>>> = OnceLock::new();
-    let dictionary = DICTIONARY.get_or_init(|| {
-        if dictionary.is_null() {
-            return None;
-        }
-        // SAFETY: passed on.
-        Dictionary::new(unsafe { slice::from_raw_parts(dictionary, dictionary_size) }).ok()
-    });
-    // SAFETY: passed on. The bytes of `out` are initialized before they are a slice.
+    static DICTIONARY: OnceLock<Dictionary<'static>> = OnceLock::new();
+    if DICTIONARY.get().is_none() && !dictionary.is_null() {
+        // SAFETY: it has `dictionary_size` bytes for good.
+        let bytes = unsafe { slice::from_raw_parts(dictionary, dictionary_size) };
+        let Ok(dictionary) = Dictionary::new(bytes) else {
+            return false;
+        };
+        DICTIONARY.get_or_init(|| dictionary);
+    }
+    // SAFETY: the caller guarantees what `frame()` asks for. The `size` bytes of `out` are initialized first.
     let (frame, out) = unsafe {
         out.write_bytes(0, size);
         (
@@ -72,9 +73,7 @@ unsafe extern "C" fn Bun__ICUItem__decompress(
             slice::from_raw_parts_mut(out, size),
         )
     };
-    frame.is_some_and(|frame| {
-        decompress(frame, &mut Output::slice(out), dictionary.as_ref()).is_ok()
-    })
+    frame.is_some_and(|frame| decompress(frame, &mut Output::slice(out), DICTIONARY.get()).is_ok())
 }
 
 #[cfg(test)]

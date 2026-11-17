@@ -95,7 +95,8 @@ impl HuffmanWeights {
         counts.at_mut(quarter)[0] -= 1;
         *counts.at_mut(quarter).at_mut(last_weight) += 1;
         self.counts_by_quarter = counts;
-        if self.rank_counts[1] < 2 || !self.rank_counts[1].is_multiple_of(2) {
+        // Their number is even, as the total is.
+        if self.rank_counts[1] == 0 {
             return Err(Error::CorruptionDetected);
         }
         Ok(())

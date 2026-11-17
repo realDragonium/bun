@@ -1,15 +1,15 @@
 //! Up to two symbols at a time.
 
-use super::QUICK_LOG;
-use super::ranks::Ranks;
-use super::streams::{LOOKUPS, Lane, ROUNDS_MAX, Stream, Windows, interleave, unload};
 use bun_highway::with_bmi2;
 
+use super::ranks::Ranks;
+use super::streams::{LOOKUPS, Lane, ROUNDS_MAX, Stream, Windows, interleave, unload};
+use super::{HuffmanWeights, QUICK_LOG};
 use crate::array::At;
 use crate::error::{Error, Result};
 use crate::format::BLOCK_LEN_MAX;
 
-pub(super) use layout::PairTable;
+use layout::Rows;
 
 /// Loads are cheaper than shifts.
 #[cfg(target_arch = "x86_64")]
@@ -31,14 +31,14 @@ mod layout {
 
     /// By the next [`QUICK_LOG`] bits: the one or two codes that they start with.
     #[repr(C)]
-    pub(crate) struct PairTable {
+    pub(super) struct Rows {
         lengths: [u8; QUICK_LEN + FILL],
         counts: [Count; QUICK_LEN + FILL],
         symbols: [u16; QUICK_LEN + FILL],
     }
 
-    impl PairTable {
-        pub(crate) const EMPTY: Self = Self {
+    impl Rows {
+        pub(super) const EMPTY: Self = Self {
             lengths: [0; _],
             counts: [Count::None; _],
             symbols: [0; _],
@@ -128,10 +128,10 @@ mod layout {
     const COUNT_SHIFT: u32 = 30;
 
     /// By the next [`QUICK_LOG`] bits: the length, the symbols and the count of the one or two codes that they start with.
-    pub(crate) struct PairTable([u32; QUICK_LEN + ROWS_IN_FILL]);
+    pub(super) struct Rows([u32; QUICK_LEN + ROWS_IN_FILL]);
 
-    impl PairTable {
-        pub(crate) const EMPTY: Self = Self([0; _]);
+    impl Rows {
+        pub(super) const EMPTY: Self = Self([0; _]);
 
         #[inline(always)]
         pub(super) fn set_alone(
@@ -197,9 +197,46 @@ const ROUND_ROOM: usize = (LOOKUPS - 1) * layout::COUNT_MAX + 2;
 /// In which a round can start at any position that has as many bits as those in a block.
 pub(crate) const AMPLE_ROOM: usize = BLOCK_LEN_MAX + ROUND_ROOM;
 
+/// With less left to fill, a lane is through.
+const ROOM_MIN: usize = 4 * LOOKUPS;
+
+/// Lanes do not go at the same pace. Those that are through repeat what another does, as long as two are busy. Returns
+/// the least room that one of these has, or 0.
+#[inline(never)]
+fn follow_a_busy_lane(lanes: &mut [Lane; 4], rooms: [usize; 4]) -> usize {
+    let mut busy = (0..4).filter(|&lane| *rooms.at(lane) >= ROOM_MIN);
+    let (Some(leader), Some(_)) = (busy.next(), busy.next()) else {
+        return 0;
+    };
+    let leader = *lanes.at(leader);
+    let mut least = usize::MAX;
+    for (lane, &room) in lanes.iter_mut().zip(&rooms) {
+        if room < ROOM_MIN {
+            *lane = leader;
+        } else {
+            least = least.min(room);
+        }
+    }
+    least
+}
+
+#[repr(C)]
+pub(super) struct PairTable {
+    rows: Rows,
+    lengths_by_symbol: [u8; 256],
+}
+
 impl PairTable {
+    pub(super) const EMPTY: Self = Self {
+        rows: Rows::EMPTY,
+        lengths_by_symbol: [0; _],
+    };
+
     #[inline(always)]
-    pub(super) fn fill(&mut self, ranks: &Ranks) -> Result<()> {
+    pub(super) fn fill(&mut self, tree: &HuffmanWeights, ranks: &Ranks) -> Result<()> {
+        for (length, weight) in self.lengths_by_symbol.iter_mut().zip(&tree.weights) {
+            *length = (tree.table_log as u8 + 1).wrapping_sub(*weight);
+        }
         let mut row = 0;
         for (length, firsts) in ranks.up_to(QUICK_LOG) {
             let Some((&first, others)) = firsts.split_first() else {
@@ -209,33 +246,41 @@ impl PairTable {
             let period = 1 << room;
             let alone = ranks.rows_beyond(room) >> length;
             if alone == period {
-                self.set_alone(row, alone, firsts, length)?;
+                self.rows.set_alone(row, alone, firsts, length)?;
                 row += firsts.len() * alone;
                 continue;
             }
-            self.set_alone(row, alone, &[first], length)?;
+            self.rows.set_alone(row, alone, &[first], length)?;
             row += alone;
             for (second_length, seconds) in ranks.up_to(room) {
                 let repeats = 1 << (room - second_length);
-                self.set_pairs(row, repeats, first, seconds, length + second_length)?;
+                self.rows
+                    .set_pairs(row, repeats, first, seconds, length + second_length)?;
                 row += seconds.len() * repeats;
             }
             // What can follow a code depends on nothing but its length.
             if !others.is_empty() {
-                self.repeat_for(others, start, period)?;
+                self.rows.repeat_for(others, start, period)?;
                 row += others.len() * period;
             }
         }
         Ok(())
     }
 
+    /// The first symbol that `bits` start with, and the length of its code.
+    #[inline(always)]
+    pub(super) fn first(&self, bits: u64) -> (u8, u8) {
+        let symbol = self.rows.symbols(self.rows.find(bits).0) as u8;
+        (symbol, *self.lengths_by_symbol.at(symbol.into()))
+    }
+
     /// At `position` of `out`, which it moves on.
     #[inline(always)]
     fn write<const N: usize>(&self, row: usize, out: &mut [u8; N], position: &mut usize) {
         if let Some(pair) = out.get_mut(*position..).and_then(<[u8]>::first_chunk_mut) {
-            *pair = self.symbols(row).to_le_bytes();
+            *pair = self.rows.symbols(row).to_le_bytes();
         }
-        *position += self.count(row);
+        *position += self.rows.count(row);
     }
 
     /// Returns what is left to fill of `out`.
@@ -251,7 +296,7 @@ impl PairTable {
         {
             let mut len = 0;
             for lookup in 0..LOOKUPS {
-                let (row, length) = self.find(stream.bits);
+                let (row, length) = self.rows.find(stream.bits);
                 if lookup == 0 {
                     stream.bits = loaded;
                 }
@@ -270,37 +315,28 @@ impl PairTable {
         lanes: &mut [Lane; 4],
         outs: &mut [&mut [u8]; 4],
     ) -> Result<()> {
-        const ROOM_MIN: usize = 4 * LOOKUPS;
-
         with_bmi2(
             #[inline(always)]
             move || {
                 let mut stages = [[0; 256 + ROUND_ROOM]; 4];
+                let mut working = *lanes;
                 loop {
-                    // They do not go at the same pace. Those that are through repeat what another does.
-                    let mut busy = outs
-                        .iter()
-                        .zip(&*lanes)
-                        .filter(|(out, _)| out.len() >= ROOM_MIN);
-                    let (Some((first, &leader)), Some((second, _))) = (busy.next(), busy.next())
-                    else {
-                        return Ok(());
-                    };
-                    let room = busy.fold(first.len().min(second.len()), |room, (out, _)| {
-                        room.min(out.len())
-                    });
-                    let rounds = room.min(255) / (2 * LOOKUPS);
-                    let mut working = [leader; 4];
-                    for ((working, lane), out) in working.iter_mut().zip(&*lanes).zip(&*outs) {
-                        *working = if out.len() >= ROOM_MIN { *lane } else { leader };
+                    let [a, b, c, d] = &*outs;
+                    let rooms @ [a, b, c, d] = [a.len(), b.len(), c.len(), d.len()];
+                    let mut room = a.min(b).min(c).min(d);
+                    if room < ROOM_MIN {
+                        room = follow_a_busy_lane(&mut working, rooms);
+                        if room == 0 {
+                            return Ok(());
+                        }
                     }
                     let mut lens = [0; 4];
                     interleave(
                         windows,
                         &mut working,
-                        rounds,
+                        room.min(255) / (2 * LOOKUPS),
                         #[inline(always)]
-                        |bits| self.find(bits),
+                        |bits| self.rows.find(bits),
                         #[inline(always)]
                         |lane, _, lookup, row| {
                             let len = lens.at_mut(lane);
@@ -310,14 +346,11 @@ impl PairTable {
                             self.write(row, stages.at_mut(lane), len);
                         },
                     )?;
-                    let results = stages.iter().zip(&lens).zip(&working);
-                    for (((stage, &len), working), (out, lane)) in
-                        results.zip(outs.iter_mut().zip(&mut *lanes))
-                    {
+                    for (lane, out) in outs.iter_mut().enumerate() {
                         if out.len() >= ROOM_MIN {
-                            let stage = stage.as_chunks().0.first_chunk::<2>();
-                            unload(stage.ok_or(Error::Internal)?, len, out)?;
-                            *lane = *working;
+                            let stage = stages.at(lane).as_chunks().0.first_chunk::<2>();
+                            unload(stage.ok_or(Error::Internal)?, *lens.at(lane), out)?;
+                            *lanes.at_mut(lane) = *working.at(lane);
                         }
                     }
                 }
@@ -350,7 +383,7 @@ impl PairTable {
                         lanes,
                         rounds,
                         #[inline(always)]
-                        |bits| self.find(bits),
+                        |bits| self.rows.find(bits),
                         #[inline(always)]
                         |lane, _, lookup, row| {
                             let position = at.at_mut(lane);

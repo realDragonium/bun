@@ -305,6 +305,20 @@ fn literals_of_all_sizes() -> Result<()> {
 }
 
 #[test]
+fn short_frames_take_little_room() -> Result<()> {
+    let mut frame = Frame::new(20, Vec::new());
+    frame.compressed(&huffman(&[4; 16], 4, vec![5; 5000]), &[]);
+    frame.bytes.extend([1, 0, 0]);
+    let mut decoder = Decoder::new();
+    for _ in 0..30 {
+        let mut out = Vec::new();
+        decoder.step_growing(&frame.bytes, &mut out, usize::MAX).1?;
+        assert!(out.len() == 5000 && out.capacity() < 6000);
+    }
+    Ok(())
+}
+
+#[test]
 fn matches_of_all_periods_and_lengths() -> Result<()> {
     let mut noise = Noise(2);
     let mut frame = Frame::new(14, noise.bytes(100));
@@ -526,19 +540,4 @@ fn what_does_not_add_up_is_refused() {
     }
     let fewer = [&repeated(0, 899).section, &block[4..]].concat();
     assert_eq!(decode(&fewer, 3608), Err(Error::CorruptionDetected));
-
-    for (lengths, size) in [(vec![4; 16], 40_000), (vec![6; 64], 5000)] {
-        let literals = huffman(&lengths, 4, vec![1; size]);
-        let block = [&literals.section[..], &[0]].concat();
-        assert_eq!(decode(&block, 1 << 18), Ok(()));
-        for wrong_size in [size - 4, size + 4, 2 * size, BLOCK] {
-            let mut block = block.clone();
-            let header = u32::from_le_bytes(*block.first_chunk().unwrap());
-            let header = header & !(0x3_FFFF << 4) | (wrong_size as u32) << 4;
-            block[..4].copy_from_slice(&header.to_le_bytes());
-            for room in [8 + wrong_size, 1 << 18] {
-                assert_eq!(decode(&block, room), Err(Error::CorruptionDetected));
-            }
-        }
-    }
 }

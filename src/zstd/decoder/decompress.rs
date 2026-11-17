@@ -31,12 +31,12 @@ fn decompress_frames(
             &Ok(Header::Skippable { content_len }) => {
                 (src.get(skippable_len(content_len)?..)).ok_or(Error::SrcSizeWrong)?
             }
+            Ok(Header::Incomplete(_)) => return Err(Error::SrcSizeWrong),
             _ if !can_hold_headers(src) => return Err(Error::SrcSizeWrong),
             Ok(Header::Frame(header)) => {
                 is_first = false;
                 decompress_frame(&mut blocks, header, src, false, out, dictionary)?
             }
-            Ok(Header::Incomplete(_)) => return Err(Error::SrcSizeWrong),
             Err(Error::PrefixUnknown) if !is_first => return Err(Error::SrcSizeWrong),
             &Err(error) => return Err(error),
         };
@@ -44,28 +44,18 @@ fn decompress_frames(
     Ok(())
 }
 
-pub(crate) fn check_dictionary(
-    header: &FrameHeader,
-    dictionary: Option<&Dictionary<'_>>,
-) -> Result<()> {
-    if header.dictionary_id != 0 && header.dictionary_id != dictionary.map_or(0, Dictionary::id) {
-        return Err(Error::DictionaryWrong);
-    }
-    Ok(())
-}
-
-/// `src` starts with `header`. `is_last` is a hint. Returns what follows the frame.
+/// `frame` starts with `header`. `is_last` is whether it seems to be the last frame. Returns what follows the frame.
 pub(crate) fn decompress_frame<'s>(
     blocks: &mut BlockDecoder,
     header: &FrameHeader,
-    src: &'s [u8],
+    frame: &'s [u8],
     is_last: bool,
     out: &mut Output<'_>,
     dictionary: Option<&Dictionary<'_>>,
 ) -> Result<&'s [u8]> {
-    check_dictionary(header, dictionary)?;
+    header.check_dictionary(dictionary)?;
     blocks.start_frame(dictionary);
-    let mut src = src.get(header.len..).ok_or(Error::Internal)?;
+    let mut src = frame.get(header.len..).ok_or(Error::Internal)?;
     let mut hash = header.has_checksum.then(XxHash64::new);
     let history_start = out.written();
     loop {
@@ -74,19 +64,18 @@ pub(crate) fn decompress_frame<'s>(
         let (content, rest) =
             (rest.split_at_checked(block.content_len())).ok_or(Error::SrcSizeWrong)?;
         src = rest;
+        if block.block_type() == BlockType::Compressed && content.len() > header.block_len_max() {
+            return Err(Error::SrcSizeWrong);
+        }
         let history_len = out.written() - history_start;
         let external = dictionary.map(Dictionary::history).unwrap_or_default();
         let room = out.room();
         let mut destination = Destination::new(out, header, history_len, external, room);
         destination.is_last_frame = is_last;
-        let len = match block.block_type() {
-            BlockType::Compressed if content.len() > header.block_len_max() => {
-                Err(Error::SrcSizeWrong)
-            }
-            BlockType::Compressed => blocks.decode(content, dictionary, destination),
-            BlockType::Raw => destination.finish(0, content),
-            BlockType::Rle => destination.finish_repeated(content, block.size()),
-        }?;
+        let so_far = frame
+            .get(..frame.len() - rest.len())
+            .ok_or(Error::Internal)?;
+        let len = blocks.decode(block, so_far, content.len(), dictionary, destination)?;
         if let Some(hash) = &mut hash {
             hash.update(out.last_written(len));
         }
