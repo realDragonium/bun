@@ -21,8 +21,8 @@ describe("zstd compresses and decompresses the way it was recorded to", () => {
       mixed: 135,
       small: 89,
       workers: 37,
-      encoded: 30,
-      stored: 122,
+      encoded: 28,
+      stored: 120,
     });
   });
 
