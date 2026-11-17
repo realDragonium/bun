@@ -1780,18 +1780,9 @@ macro_rules! with_bmi2 {
     };
 }
 
-/// The same for generic code, and with BMI1 and LZCNT. `run` and what it calls have to be `#[inline(always)]`.
-///
-/// Either way it becomes a function of its own, which is aligned: how fast its loops are does not depend on what is
-/// linked before it.
+/// The same for generic code, with BMI1 and LZCNT too. `run` and what it calls have to be `#[inline(always)]`.
 #[inline(always)]
 pub fn with_bmi2<R>(run: impl FnOnce() -> R) -> R {
-    #[inline(never)]
-    #[rustc_align(64)]
-    fn baseline<R>(run: impl FnOnce() -> R) -> R {
-        run()
-    }
-
     #[cfg(all(target_arch = "x86_64", not(miri)))]
     if is_x86_feature_detected!("bmi1")
         && is_x86_feature_detected!("bmi2")
@@ -1805,7 +1796,14 @@ pub fn with_bmi2<R>(run: impl FnOnce() -> R) -> R {
         // SAFETY: the CPU has the three features.
         return unsafe { bmi2(run) };
     }
-    baseline(run)
+    out_of_line(run)
+}
+
+/// In a function of its own, which is aligned: the speed of its loops does not depend on what is linked before it.
+#[inline(never)]
+#[rustc_align(64)]
+pub fn out_of_line<R>(run: impl FnOnce() -> R) -> R {
+    run()
 }
 
 #[cfg(test)]

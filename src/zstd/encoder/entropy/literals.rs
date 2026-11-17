@@ -298,8 +298,7 @@ impl LiteralTables {
         }))
     }
 
-    /// The section for a part of the literals that `plan` is for, and whether later parts can repeat its table. `None`
-    /// if it cannot be compressed.
+    /// For a part of the literals of `plan`. Also tells whether later parts can repeat its table.
     pub(crate) fn write_part(
         &self,
         plan: &LiteralsPlan,

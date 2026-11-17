@@ -46,8 +46,7 @@ impl<'a, const N: usize> AtLeast<'a, N> {
         Some(u64::from_le_bytes(*self.bytes.get(at..)?.first_chunk()?))
     }
 
-    /// Whether there is a chunk at `at` for whose first word `is_match` holds. A branch on the former may be hard to
-    /// predict.
+    /// Whether there is a chunk at `at`, which may be hard to predict, and `is_match` holds for its first word.
     #[inline(always)]
     pub(crate) fn matches_at<const IS_BRANCHLESS: bool>(
         self,

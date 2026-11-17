@@ -1258,3 +1258,20 @@ fn main() -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generic_args_stand_for_the_instances_of_one_function() {
+        let generic = "_RINvNv<rust-hash>3foo4gate4fast<generic-args>";
+        let allowlist = Allowlist::from([(generic.into(), None), ("plain".into(), None)]);
+        let is_listed = |symbol| allowlist.contains_key(&allowlist_key(symbol, &allowlist));
+        assert!(is_listed("_RINvNvCs1a_3foo4gate4fastmNCNvCs2b_3bar3run0EB4_"));
+        assert!(is_listed("plain"));
+        assert!(!is_listed("_RINvNvCs1a_3foo4gate8baselinemNCNvCs2b_3bar3run0EB4_"));
+        assert!(!is_listed("_RNvCs2b_3bar3run"));
+        assert!(!is_listed("plain_too"));
+    }
+}

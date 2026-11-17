@@ -273,8 +273,7 @@ pub(crate) fn count_codes(sequences: &[Sequence]) -> CodeCounts {
     counts
 }
 
-/// Where the literals start in their buffer. Copying to an address that is a few bytes further into its page is slow
-/// on some CPUs, and buffers tend to start with a page.
+/// Most output starts with a page, so these do not: https://sourceware.org/bugzilla/show_bug.cgi?id=30994
 const LITERALS_START: usize = 256;
 /// How far the copy of literals may go past their end.
 const OVERCOPY: usize = 16;

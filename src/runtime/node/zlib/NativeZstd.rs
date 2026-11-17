@@ -37,7 +37,7 @@ mod _impl {
             }
         }
 
-        /// Per-mode external-allocation footprint, fixed at construction.
+        /// `ZSTD_sizeof_CCtx()` and `ZSTD_sizeof_DCtx()` of a new context of libzstd, which the GC is used to.
         fn external_size_for(mode: NodeMode) -> usize {
             match mode {
                 NodeMode::ZSTD_COMPRESS => 5272,

@@ -108,6 +108,24 @@ pub(super) fn compare<const REACH: Reach>(
     }
 }
 
+/// Like [`Tree::prefetch_after`], for hashes of up to 6 bytes. `word` is at the position before.
+#[inline(always)]
+pub(super) fn prefetch_attached(
+    attached: &Attached<'_>,
+    history: &History<'_>,
+    hasher: Hasher,
+    word: u64,
+) {
+    prefetch(attached.hash, hasher.hash(word >> 16));
+    if let Some(&root) = attached.hash.get(hasher.hash(word >> 8)) {
+        prefetch(history.older, Attached::position(root) as usize);
+        prefetch(
+            attached.chain,
+            (2 * root as usize) & attached.chain.len().wrapping_sub(1),
+        );
+    }
+}
+
 /// Goes down the tree of a dictionary until `visit`, which gets an index of the history and a length, returns true.
 #[inline(always)]
 pub(super) fn descend_attached(

@@ -200,7 +200,7 @@ fn compress_zstd(
     level: Option<i32>,
     spill: &mut Vec<u8>,
 ) -> crate::Result<CompressOutput> {
-    let level = level.unwrap_or(bun_zstd::DEFAULT_LEVEL);
+    let level = level.unwrap_or(DEFAULT_ZSTD_LEVEL);
     let bound = bun_zstd::compress_bound(input.len());
     let result = if bound.is_some_and(|bound| bound <= state.shared_buffer.len()) {
         let mut out = bun_zstd::Output::slice(&mut state.shared_buffer[..]);

@@ -3,13 +3,11 @@
 use core::cell::Cell;
 use core::convert::{Infallible, identity};
 
-use bun_highway::with_bmi2;
+use bun_highway::{out_of_line, with_bmi2};
 
 use super::hash::{Hasher, Tagged, fill_gap, insert};
 use super::near::{Entries, Near};
-use super::{
-    Attached, MatchState, Owner, Progress, Reach, SKIP_LOG, TablesMut, apart, cells, prefetch,
-};
+use super::{Attached, MatchState, Owner, Progress, Reach, SKIP_LOG, TablesMut, cells, prefetch};
 use crate::bytes::{AtLeast, chunk_at, likely, u32_at, u64_at, word_in};
 use crate::parameters::{TAG_BITS, Tuning};
 use crate::sequences::{OffsetValue, Repeats, Sequences};
@@ -37,23 +35,42 @@ pub(super) fn fill<const OWNER: Owner>(state: &mut MatchState, history: &History
         }
     }
 
+    #[inline(always)]
+    fn fill_all<const OWNER: Owner>(
+        mut tables: TablesMut<'_>,
+        hashers: [Hasher; 2],
+        history: History<'_>,
+        mut position: u32,
+    ) -> Option<Infallible> {
+        if OWNER == Owner::Dictionary {
+            let first = history.part(0, position + tables.hash.len() as u32);
+            fill_from::<OWNER, true>(&mut tables, hashers, first, &mut position);
+        }
+        fill_from::<OWNER, false>(&mut tables, hashers, history, &mut position)
+    }
+
     let tuning = state.tuning;
-    let hashers = [
-        Hasher::new(8, tuning.hash_log),
-        Hasher::new(tuning.min_match, tuning.chain_log),
-    ];
-    let (history, mut position) = (*history, history.position(state.next_to_index));
+    let short = Hasher::new(tuning.min_match, tuning.chain_log);
+    let (history, position) = (*history, history.position(state.next_to_index));
     let mut tables = state.tables.split_mut();
-    with_bmi2(
-        #[inline(always)]
-        move || {
-            if OWNER == Owner::Dictionary {
-                let first = history.part(0, position + tables.hash.len() as u32);
-                fill_from::<OWNER, true>(&mut tables, hashers, first, &mut position);
-            }
-            fill_from::<OWNER, false>(&mut tables, hashers, history, &mut position)
-        },
-    );
+    // Those of the default level for most dictionaries.
+    if OWNER == Owner::Dictionary && (tuning.hash_log, tuning.chain_log) == (16, 15) {
+        out_of_line(
+            #[inline(always)]
+            move || {
+                tables.hash = tables.hash.get_mut(..1 << 16)?;
+                tables.chain = tables.chain.get_mut(..1 << 15)?;
+                let hashers = [Hasher::new(8, 16), short.with_bits(15)];
+                fill_all::<OWNER>(tables, hashers, history, position)
+            },
+        );
+    } else {
+        let hashers = [Hasher::new(8, tuning.hash_log), short];
+        with_bmi2(
+            #[inline(always)]
+            move || fill_all::<OWNER>(tables, hashers, history, position),
+        );
+    }
 }
 
 pub(super) fn search<const REACH: Reach>(
@@ -182,7 +199,7 @@ impl<'a> Searcher<'a> {
         self,
         search: impl FnOnce(Self) -> Option<R>,
     ) -> Option<R> {
-        apart(
+        out_of_line(
             #[inline(always)]
             move || {
                 search(Self {

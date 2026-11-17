@@ -443,8 +443,7 @@ impl CodeTables {
         plan.chosen.len + lens.sum::<usize>()
     }
 
-    /// The section for a part of the sequences that `plan` is for, and whether later parts can repeat its tables. `None`
-    /// if it cannot be compressed.
+    /// For a part of the sequences of `plan`. Also tells whether later parts can repeat its tables.
     pub(crate) fn write_part(
         &self,
         plan: &CodesPlan,

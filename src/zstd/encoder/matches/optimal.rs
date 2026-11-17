@@ -361,6 +361,9 @@ impl Finder<'_> {
         self.tree.insert_up_to::<REACH>(history, at)?;
 
         let word = likely(u64_at(history.prefix, at))?;
+        if REACH == Reach::Attached {
+            tree::prefetch_attached(&self.attached, history, self.attached_hasher, word);
+        }
         let left = history.end() - at;
         let lowest = self.tree.bounds.lowest(current);
         let sufficient_len = self.sufficient_len;

@@ -250,8 +250,7 @@ impl<'a> History<'a> {
         ((len + more) as u32, is_below)
     }
 
-    /// Up to where the bytes from `position` on equal those `distance` further in `run`, and whether the next one is
-    /// lower there.
+    /// Where the bytes from `position` on start to differ from those `distance` further in `run`, and if these are lower.
     #[inline(always)]
     fn compare_in(&self, position: u32, run: &[u8], distance: u32) -> (u32, bool) {
         let mut end = position;

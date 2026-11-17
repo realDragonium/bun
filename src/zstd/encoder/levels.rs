@@ -4,8 +4,7 @@ use crate::parameters::Strategy::{self, *};
 
 pub(crate) const MAX_LEVEL: i32 = 22;
 
-/// By size of the input and by level: the logs of window, chain, hash and search, the minimum match, the target length,
-/// and the strategy. Negative levels start from row 0.
+/// The logs of window, chain, hash and search, the minimum match and the target length. Row 0 is for negative levels.
 #[rustfmt::skip]
 pub(crate) static LEVELS: [[([u16; 6], Strategy); MAX_LEVEL as usize + 1]; 4] = [
     // More than 256 KB, or unknown

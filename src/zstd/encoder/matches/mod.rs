@@ -129,13 +129,6 @@ fn prefetch<T>(items: &[T], at: usize) {
     core::hint::prefetch_read(item, core::hint::Locality::L1);
 }
 
-/// For code that is tuned: how fast its loops are does not depend on what surrounds it.
-#[inline(never)]
-#[rustc_align(64)]
-fn apart<R>(run: impl FnOnce() -> R) -> R {
-    run()
-}
-
 /// How far back a match can start.
 #[derive(Clone, Copy)]
 struct Bounds {

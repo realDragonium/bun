@@ -82,8 +82,7 @@ pub fn decompress_alloc(src: &[u8]) -> Result<Vec<u8>, ZstdError> {
     Ok(output)
 }
 
-/// Decompresses one frame that was compressed with `prefix` as its raw content dictionary. The size has to be in the
-/// header of the frame, and at most 16 MB.
+/// One frame that has `prefix` as its raw dictionary, and a size of at most 16 MB in its header.
 pub fn decompress_alloc_with_prefix(src: &[u8], prefix: &[u8]) -> Result<Vec<u8>, ZstdError> {
     match bun_zstd_decoder::decompressed_size(src) {
         ContentSize::Known(size) if size <= MAX_PREALLOCATE_SIZE as u64 => {

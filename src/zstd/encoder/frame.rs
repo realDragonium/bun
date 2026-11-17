@@ -398,7 +398,7 @@ impl FrameWriter {
         state.reserve(len)?;
         if let Some(finder) = &mut self.long_finder {
             self.long_matches.clear();
-            finder.find(input, start, len, &mut self.long_matches);
+            finder.find(input, start, len, &mut self.long_matches, || false);
         }
         let end = if self.long_finder.is_some() || !self.long_matches.are_used_up() {
             self.long_matches

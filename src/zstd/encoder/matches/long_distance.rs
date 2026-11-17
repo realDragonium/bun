@@ -309,17 +309,19 @@ impl Finder {
         self.window.next += len as u32;
     }
 
-    /// For the `len` bytes at `start` of the segment, which are next.
+    /// For the `len` bytes at `start` of the segment, which are next, unless it `is_abandoned` on the way.
     pub(crate) fn find(
         &mut self,
         input: &Input<'_>,
         start: usize,
         len: usize,
         candidates: &mut Candidates,
+        is_abandoned: impl Fn() -> bool,
     ) {
         const CHUNK_LEN: usize = 1 << 20;
         let mut unmatched = 0;
-        for chunk_start in (start..start + len).step_by(CHUNK_LEN) {
+        let chunks = (start..start + len).step_by(CHUNK_LEN);
+        for chunk_start in chunks.take_while(|_| !is_abandoned()) {
             let chunk_len = CHUNK_LEN.min(start + len - chunk_start);
             self.make_room_for(chunk_len);
             // An offset has to be valid up to the end of its match, which may be split.
@@ -478,6 +480,7 @@ mod tests {
                     start,
                     BLOCK_LEN,
                     &mut candidates,
+                    || false,
                 );
                 finder.skip(5);
                 let list = candidates.list.iter();

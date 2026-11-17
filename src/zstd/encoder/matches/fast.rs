@@ -3,11 +3,11 @@
 use core::cell::Cell;
 use core::convert::Infallible;
 
-use bun_highway::with_bmi2;
+use bun_highway::{out_of_line, with_bmi2};
 
 use super::hash::{Hasher, Tagged, fill_gap, insert};
 use super::near::{Entries, Near};
-use super::{Attached, MatchState, Owner, Progress, Reach, SKIP_LOG, apart, cells, prefetch};
+use super::{Attached, MatchState, Owner, Progress, Reach, SKIP_LOG, cells, prefetch};
 use crate::bytes::{AtLeast, chunk_at, likely, u32_at, u64_at, word_in};
 use crate::parameters::TAG_BITS;
 use crate::sequences::{OffsetValue, Repeats, Sequences};
@@ -158,7 +158,7 @@ impl<'a> Searcher<'a> {
     /// With a table whose size the compiler knows, hashes need no checks.
     #[inline(always)]
     fn run_sized<const LOG: u32, R>(self, search: impl FnOnce(Self) -> Option<R>) -> Option<R> {
-        apart(
+        out_of_line(
             #[inline(always)]
             move || {
                 search(Self {
@@ -197,8 +197,7 @@ impl<'a> Searcher<'a> {
         }
     }
 
-    /// The steps for a position, which each wait for memory, overlap with those for the next ones. Unless it
-    /// [`HAS_REPEATS`](Near::has_repeats) from the start, it returns where it does.
+    /// Unless it [`HAS_REPEATS`](Near::has_repeats) from the start, it returns where it does.
     #[inline(always)]
     fn scan_prefix<const ENTRIES: Entries, const HAS_REPEATS: bool>(
         mut self,
@@ -303,8 +302,7 @@ impl<'a> Searcher<'a> {
         }
     }
 
-    /// Indexes some of a match that was found at `searched`, and takes what follows it at the second most recent offset.
-    /// Returns where to go on.
+    /// Indexes some of the match that was found at `searched`, and stores what repeats after it. Returns where to go on.
     #[inline(always)]
     fn follow_up(&self, searched: u32, end: u32, progress: &mut Progress<'_>) -> Option<u32> {
         let (history, mut at) = (&self.history, end);

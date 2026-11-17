@@ -87,8 +87,7 @@ impl Splitter<'_> {
     }
 }
 
-/// A part that ends up uncompressed leaves the recent offsets of a decoder as they are, unlike those that the search
-/// counted on.
+/// A part that ends up uncompressed does not change the recent offsets of a decoder the way the search counted on.
 fn replace_lost_repeats(sequences: &mut [Sequence], decoder: &mut Repeats, search: &mut Repeats) {
     for sequence in sequences {
         let (found, has_literals) = (sequence.offset(), sequence.literal_len() != 0);

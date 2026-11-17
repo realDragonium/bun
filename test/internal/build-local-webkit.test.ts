@@ -763,6 +763,32 @@ describe.skipIf(Bun.which(python) === null)("the graph of a checkout", () => {
       for (const source of program.sources) cxx(n, cfg, source, { flags: program.cxxflags });
     }
   });
+
+  test("the programs that use the ICU of a prebuilt WebKit read its data with Bun's decoder", () => {
+    using local = checkOut({}, checkout);
+    const { cfg, short } = local;
+    const saved = process.env.BUN_ICU_ROOT;
+    try {
+      process.env.BUN_ICU_ROOT = join("/somewhere", "icu");
+      const reading = jscPrograms(cfg).filter(program => program.rustCrates !== undefined);
+      expect(
+        reading.map(({ name, sources, rustCrates }) => [
+          name,
+          sources.map(short).filter(source => source.endsWith("ICUData.cpp")),
+          rustCrates,
+        ]),
+      ).toEqual(
+        ["jsc", "testaot"].map(name => [
+          name,
+          [`B/programs/${name}/ICUData.cpp`],
+          ["bun_icu_data", "bun_global_allocator"],
+        ]),
+      );
+    } finally {
+      if (saved === undefined) delete process.env.BUN_ICU_ROOT;
+      else process.env.BUN_ICU_ROOT = saved;
+    }
+  });
 });
 
 describe("DirectBuild groups and steps", () => {

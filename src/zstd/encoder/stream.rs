@@ -357,8 +357,7 @@ impl Encoder {
         Ok(status)
     }
 
-    /// Takes all of `input` unless `out` fills up. Returns how much it took, and whether there is output left that
-    /// `directive` asks for. After an error, every call returns that error until [`reset_session`](Self::reset_session).
+    /// Returns how much of `input` it took. An error stays until [`reset_session`](Self::reset_session).
     #[inline(never)]
     pub fn step(
         &mut self,

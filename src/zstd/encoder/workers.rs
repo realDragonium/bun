@@ -33,7 +33,12 @@ struct LongMatcher {
 }
 
 impl LongMatcher {
-    fn find(&mut self, section: &[u8], candidates: &mut Candidates) -> Result<()> {
+    fn find(
+        &mut self,
+        section: &[u8],
+        candidates: &mut Candidates,
+        interest: &Interest,
+    ) -> Result<()> {
         if self.filled + section.len() > self.buffer.capacity() {
             self.older_end = core::mem::take(&mut self.filled);
         }
@@ -50,8 +55,9 @@ impl LongMatcher {
         };
         candidates.clear_for(self.section_len, &self.parameters)?;
         self.finder.admit(&input);
-        self.finder.find(&input, start, section.len(), candidates);
-        Ok(())
+        let is_lost = || interest.ensure().is_err();
+        (self.finder).find(&input, start, section.len(), candidates, is_lost);
+        interest.ensure()
     }
 }
 
@@ -99,7 +105,7 @@ impl Worker {
         let mut relay = job.relay.wait()?;
         self.long_matches.clear();
         if let Some(matcher) = &mut relay.long_matcher {
-            matcher.find(section, &mut self.long_matches)?;
+            matcher.find(section, &mut self.long_matches, &job.interest)?;
         }
         if let Some(hash) = &mut relay.hash {
             hash.update(section);
