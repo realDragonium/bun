@@ -70,28 +70,27 @@ fn prefetch_row<const N: usize>(indices: &[u32], tags: &[u8], hash: u32) {
     prefetch(tags, first);
 }
 
-/// Fills `candidates` with what `note` makes of the indices from `lowest` on, and returns those that it filled.
+/// What `note` makes of the indices from `lowest` on, for as long as their number `is_allowed`.
 #[inline(always)]
 fn collect<'a, const N: usize>(
     indices: &[u32; N],
     tags: &[u8; N],
     tag: u8,
     lowest: u32,
-    candidates: &'a mut [u32],
+    candidates: &'a mut [u32; N],
+    is_allowed: impl Fn(usize) -> bool,
     note: impl Fn(u32) -> u32,
 ) -> Option<&'a [u32]> {
     let (head, mut matching) = matching(tags, tag);
     let mut count = 0;
-    while matching != 0
-        && let Some(candidate) = candidates.get_mut(count)
-    {
+    while matching != 0 && is_allowed(count + 1) {
         let slot = (head + matching.trailing_zeros()) as usize % N;
         matching &= matching - 1;
         let index = *indices.at(slot);
         if index < lowest {
             break;
         }
-        *candidate = note(index);
+        *candidates.at_mut(count) = note(index);
         count += 1;
     }
     candidates.get(..count)
@@ -294,7 +293,9 @@ impl<const N: usize> Finder for Rows<'_, N> {
             self.tags.get(row::<N>(hash, self.last))?.as_array()?,
             hash as u8,
             self.bounds.lowest(current),
-            candidates.get_mut(..attempts)?,
+            candidates,
+            // Larger rows come with enough attempts.
+            |count| N > 16 || count <= attempts,
             |index| {
                 let (run, at) = match REACH {
                     Reach::Older => history.locate(index),
@@ -326,7 +327,8 @@ impl<const N: usize> Finder for Rows<'_, N> {
                 likely(attached.tags.as_chunks().0.get(row))?,
                 attached_hash as u8,
                 FIRST_INDEX,
-                candidates.get_mut(..attempts)?,
+                candidates,
+                |count| count <= attempts,
                 |index| {
                     prefetch(history.older, Attached::position(index) as usize);
                     Attached::position(index)
